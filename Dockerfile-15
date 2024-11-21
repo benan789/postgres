@@ -39,8 +39,7 @@ ARG index_advisor_release=0.2.0
 ARG supautils_release=2.2.0
 ARG wal_g_release=2.0.1
 
-FROM ubuntu:focal as base
-
+FROM ubuntu:noble as base
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DEBCONF_NONINTERACTIVE_SEEN=true \
@@ -62,9 +61,11 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
     && apt clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Install libicu74
+RUN apt-get update && apt-get install -y --no-install-recommends libicu74 && rm -rf /var/lib/apt/lists/*
 
 RUN adduser --system  --home /var/lib/postgresql --no-create-home --shell /bin/bash --group --gecos "PostgreSQL administrator" postgres
-RUN adduser --system  --no-create-home --shell /bin/bash --group  wal-g
+# RUN adduser --system  --no-create-home --shell /bin/bash --group  wal-g
 RUN curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install linux \
 --init none \
 --no-confirm \
@@ -79,10 +80,7 @@ WORKDIR /nixpg
 
 RUN nix profile install .#psql_15/bin 
 
-
-
 WORKDIR /
-
 
 RUN mkdir -p /usr/lib/postgresql/bin \
     /usr/lib/postgresql/share/postgresql \
@@ -113,7 +111,6 @@ RUN chown -R postgres:postgres /usr/lib/postgresql
 
 RUN ln -sf /usr/lib/postgresql/share/postgresql/timezonesets /usr/share/postgresql/timezonesets
 
-
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
@@ -122,18 +119,24 @@ RUN apt-get update && \
 
 ENV PGDATA=/var/lib/postgresql/data
 
+# Download pg_search package
+RUN curl -L "https://github.com/paradedb/paradedb/releases/download/v0.12.2/postgresql-15-pg-search_0.12.2-1PARADEDB-noble_amd64.deb" -o /tmp/pg_search.deb && \
+    apt-get install -y /tmp/pg_search.deb && \
+    rm /tmp/pg_search.deb
+
+
 ####################
 # setup-wal-g.yml
 ####################
-FROM base as walg
-ARG wal_g_release
-# ADD "https://github.com/wal-g/wal-g/releases/download/v${wal_g_release}/wal-g-pg-ubuntu-20.04-${TARGETARCH}.tar.gz" /tmp/wal-g.tar.gz
-RUN arch=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "$TARGETARCH") && \
-    apt-get update && apt-get install -y --no-install-recommends curl && \
-    curl -kL "https://github.com/wal-g/wal-g/releases/download/v${wal_g_release}/wal-g-pg-ubuntu-20.04-aarch64.tar.gz" -o /tmp/wal-g.tar.gz && \
-    tar -xvf /tmp/wal-g.tar.gz -C /tmp && \
-    rm -rf /tmp/wal-g.tar.gz && \
-    mv /tmp/wal-g-pg-ubuntu*20.04-aarch64 /tmp/wal-g
+# FROM base as walg
+# ARG wal_g_release
+# # ADD "https://github.com/wal-g/wal-g/releases/download/v${wal_g_release}/wal-g-pg-ubuntu-20.04-${TARGETARCH}.tar.gz" /tmp/wal-g.tar.gz
+# RUN arch=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "$TARGETARCH") && \
+#     apt-get update && apt-get install -y --no-install-recommends curl && \
+#     curl -kL "https://github.com/wal-g/wal-g/releases/download/v${wal_g_release}/wal-g-pg-ubuntu-20.04-aarch64.tar.gz" -o /tmp/wal-g.tar.gz && \
+#     tar -xvf /tmp/wal-g.tar.gz -C /tmp && \
+#     rm -rf /tmp/wal-g.tar.gz && \
+#     mv /tmp/wal-g-pg-ubuntu*20.04-aarch64 /tmp/wal-g
 
 # ####################
 # # Download gosu for easy step-down from root
@@ -164,7 +167,7 @@ RUN gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys $GOSU_GPG_KEY &&
 FROM gosu as production
 RUN id postgres || (echo "postgres user does not exist" && exit 1)
 # # Setup extensions
-COPY --from=walg /tmp/wal-g /usr/local/bin/
+# COPY --from=walg /tmp/wal-g /usr/local/bin/
 
 # # Initialise configs
 COPY --chown=postgres:postgres ansible/files/postgresql_config/postgresql.conf.j2 /etc/postgresql/postgresql.conf
@@ -175,9 +178,9 @@ COPY --chown=postgres:postgres ansible/files/postgresql_config/supautils.conf.j2
 COPY --chown=postgres:postgres ansible/files/postgresql_extension_custom_scripts /etc/postgresql-custom/extension-custom-scripts
 COPY --chown=postgres:postgres ansible/files/pgsodium_getkey_urandom.sh.j2 /usr/lib/postgresql/bin/pgsodium_getkey.sh
 COPY --chown=postgres:postgres ansible/files/postgresql_config/custom_read_replica.conf.j2 /etc/postgresql-custom/read-replica.conf
-COPY --chown=postgres:postgres ansible/files/postgresql_config/custom_walg.conf.j2 /etc/postgresql-custom/wal-g.conf
-COPY --chown=postgres:postgres ansible/files/walg_helper_scripts/wal_fetch.sh /home/postgres/wal_fetch.sh
-COPY ansible/files/walg_helper_scripts/wal_change_ownership.sh /root/wal_change_ownership.sh
+# COPY --chown=postgres:postgres ansible/files/postgresql_config/custom_walg.conf.j2 /etc/postgresql-custom/wal-g.conf
+# COPY --chown=postgres:postgres ansible/files/walg_helper_scripts/wal_fetch.sh /home/postgres/wal_fetch.sh
+# COPY ansible/files/walg_helper_scripts/wal_change_ownership.sh /root/wal_change_ownership.sh
 
 RUN sed -i \
     -e "s|#unix_socket_directories = '/tmp'|unix_socket_directories = '/var/run/postgresql'|g" \
