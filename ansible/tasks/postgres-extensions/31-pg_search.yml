@@ -1,0 +1,3 @@
+- name: install pg_search
+  ansible.builtin.apt:
+    deb: "https://github.com/paradedb/paradedb/releases/download/v{{ pg_search_release }}/postgresql-{{ postgresql_major }}-pg-search_{{ pg_search_release }}-1PARADEDB-noble_amd64.deb"

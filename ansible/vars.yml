@@ -159,3 +159,5 @@ index_advisor_release: "0.2.0"
 index_advisor_checksum: sha256:2d3642012a9185cda51f1e82ba43d64a81b24a2655a3ac3afdcbbd95d46a1a27
 
 pg_backtrace_release: "1.1"
+
+pg_search_release: "0.13.0"

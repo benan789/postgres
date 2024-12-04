@@ -2,7 +2,7 @@
   description = "Prototype tooling for deploying PostgreSQL";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:benan789/nixpkgs";
     flake-utils.url = "github:numtide/flake-utils";
     nix2container.url = "github:nlewo/nix2container";
     nix-editor.url = "github:snowfallorg/nix-editor";
@@ -89,6 +89,10 @@
               buildPgrxExtension_0_12_6 = prev.buildPgrxExtension.override {
                 cargo-pgrx = final.cargo-pgrx.cargo-pgrx_0_12_6;
               };
+              
+              buildPgrxExtension_0_12_7 = prev.buildPgrxExtension.override {
+                cargo-pgrx = final.cargo-pgrx.cargo-pgrx_0_12_7;
+              };
             })
             (final: prev: {
               postgresql = final.callPackage ./nix/postgresql/default.nix {
@@ -161,6 +165,7 @@
           ./nix/ext/wrappers/default.nix
           ./nix/ext/supautils.nix
           ./nix/ext/plv8.nix
+          ./nix/ext/pg_search.nix
         ];
 
         #Where we import and build the orioledb extension, we add on our custom extensions
@@ -347,6 +352,7 @@
           supabase-groonga = supabase-groonga;
           cargo-pgrx_0_11_3 = pkgs.cargo-pgrx.cargo-pgrx_0_11_3;
           cargo-pgrx_0_12_6 = pkgs.cargo-pgrx.cargo-pgrx_0_12_6;
+          cargo-pgrx_0_12_7 = pkgs.cargo-pgrx.cargo-pgrx_0_12_7;
           # PostgreSQL versions.
           psql_15 = postgresVersions.psql_15;
           psql_16 = postgresVersions.psql_16;
@@ -706,6 +712,10 @@
         };
         cargo-pgrx_0_12_6 = mkCargoPgrxDevShell {
           pgrxVersion = "0_12_6";
+          rustVersion = "1.80.0";
+        };
+        cargo-pgrx_0_12_7 = mkCargoPgrxDevShell {
+          pgrxVersion = "0_12_7";
           rustVersion = "1.80.0";
         };
       };     
