@@ -1,6 +1,6 @@
-{ lib, stdenv, fetchFromGitHub, postgresql, buildPgrxExtension_0_12_7, cargo, rust-bin }:
+{ lib, stdenv, fetchFromGitHub, openssl, postgresql, buildPgrxExtension_0_12_7, cargo, rust-bin }:
 let
-  rustVersion = "1.80.0";
+  rustVersion = "1.83.0";
   cargo = rust-bin.stable.${rustVersion}.default;
 in
 buildPgrxExtension_0_12_7 rec {
@@ -8,6 +8,7 @@ buildPgrxExtension_0_12_7 rec {
   extension = "pg_search";
   version = "0.13.0";
   inherit postgresql;
+  cargoPackageFlags = ["--package pg_search"];
 
   src = fetchFromGitHub {
     owner = "benan789";
@@ -17,7 +18,7 @@ buildPgrxExtension_0_12_7 rec {
   };
 
   nativeBuildInputs = [ cargo ];
-  buildInputs = [ postgresql ];
+  buildInputs = [ openssl postgresql ];
 
   CARGO="${cargo}/bin/cargo";
 

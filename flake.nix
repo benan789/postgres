@@ -2,7 +2,7 @@
   description = "Prototype tooling for deploying PostgreSQL";
 
   inputs = {
-    nixpkgs.url = "github:benan789/nixpkgs";
+    nixpkgs.url = "github:benan789/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     nix2container.url = "github:nlewo/nix2container";
     nix-editor.url = "github:snowfallorg/nix-editor";
@@ -131,9 +131,7 @@
           ./nix/ext/pg_net.nix
           ./nix/ext/pg_hashids.nix
           ./nix/ext/pgsodium.nix
-          ./nix/ext/pg_graphql.nix
           ./nix/ext/pg_stat_monitor.nix
-          ./nix/ext/pg_jsonschema.nix
           ./nix/ext/pgvector.nix
           ./nix/ext/vault.nix
           ./nix/ext/hypopg.nix
