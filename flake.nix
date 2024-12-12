@@ -112,6 +112,7 @@
         ourExtensions = [
           ./nix/ext/rum.nix
           ./nix/ext/timescaledb.nix
+          ./nix/ext/timescaledb-2.9.1.nix
           ./nix/ext/pgroonga.nix
           ./nix/ext/index_advisor.nix
           ./nix/ext/wal2json.nix
@@ -149,7 +150,8 @@
         #we're not using timescaledb in the orioledb version of supabase extensions
         orioleFilteredExtensions = builtins.filter (
           x: 
-            x != ./nix/ext/timescaledb.nix && 
+            x != ./nix/ext/timescaledb.nix &&
+            x != ./nix/ext/timescaledb-2.9.1.nix &&
             x != ./nix/ext/plv8.nix && 
             x != ./nix/ext/postgis.nix && 
             x != ./nix/ext/pgrouting.nix &&
@@ -158,7 +160,10 @@
         ) ourExtensions;
 
         orioledbExtensions = orioleFilteredExtensions ++ [ ./nix/ext/orioledb.nix ];
-
+        pg16Extensions = builtins.filter (
+          x:
+          x != ./nix/ext/timescaledb-2.9.1.nix
+        ) ourExtensions;
         getPostgresqlPackage = version:
           pkgs.postgresql."postgresql_${version}";
         # Create a 'receipt' file for a given postgresql package. This is a way
@@ -202,6 +207,8 @@
             postgresql = getPostgresqlPackage version;
             extensionsToUse = if (builtins.elem version ["orioledb-16" "orioledb-17"])
               then orioledbExtensions
+              else if version == "16"
+              then pg16Extensions
               else ourExtensions;
           in map (path: pkgs.callPackage path { inherit postgresql; }) extensionsToUse;
 
