@@ -1,6 +1,6 @@
 { lib, stdenv, fetchFromGitHub, openssl, postgresql, buildPgrxExtension_0_12_7, cargo, rust-bin }:
 let
-  rustVersion = "1.83.0";
+  rustVersion = "1.84.0";
   cargo = rust-bin.stable.${rustVersion}.default;
 in
 buildPgrxExtension_0_12_7 rec {
@@ -14,7 +14,7 @@ buildPgrxExtension_0_12_7 rec {
     owner = "paradedb";
     repo = pname;
     rev = "refs/tags/v${version}";
-    hash = "sha256-mW6aYUGyYeaWZeHUgqB7t/O9yN29lm9ri0uTtmNfuzA=";
+    hash = "sha256-DcN8JTURk9N8Wq9tAZgRDUOZYLbdpMhdQ9BesDkqVcY=";
   };
 
   nativeBuildInputs = [ cargo ];
@@ -25,6 +25,11 @@ buildPgrxExtension_0_12_7 rec {
   cargoLock = {
     lockFile = "${src}/Cargo.lock";
     allowBuiltinFetchGit = true;
+    outputHashes = {
+      "tantivy-0.23.0" = "sha256-e/7yoGCZm5hB2G+EYNY3fFW6029uicG/QgnAFGqS5XY=";
+      "pgrx-0.12.7" = "sha256-BnZWS7tYzibyGoJSHcBGoqRasaFVTvW/FM/YiXlfYZo=";
+      "tantivy-fst-0.5.0" = "sha256-YeHk7tlEE2jGxgLhqhZhFj8rtZ0bwQINNdLQDh4Mw7I=";
+    };
   };
 
   #darwin env needs PGPORT to be unique for build to not clash with other pgrx extensions
@@ -36,7 +41,7 @@ buildPgrxExtension_0_12_7 rec {
     RUST_BACKTRACE = "full";
     CARGO_BUILD_OPTS = "--verbose"; 
   };
-  cargoHash = "sha256-mW6aYUGyYeaWZeHUgqB7t/O9yN29lm9ri0uTtmNfuzA=";
+  cargoHash = "sha256-DcN8JTURk9N8Wq9tAZgRDUOZYLbdpMhdQ9BesDkqVcY=";
 
   # FIXME (aseipp): testsuite tries to write files into /nix/store; we'll have
   # to fix this a bit later.

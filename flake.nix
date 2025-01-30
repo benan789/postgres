@@ -830,9 +830,11 @@
         # reach.
 
       devShells = let
-        mkCargoPgrxDevShell = { pgrxVersion, rustVersion }: pkgs.mkShell {
+        mkCargoPgrxDevShell = { pgrxVersion, rustVersion, pgrxSrc ? null }: pkgs.mkShell {
           packages = with pkgs; [
-            basePackages."cargo-pgrx_${pgrxVersion}"
+            (basePackages."cargo-pgrx_${pgrxVersion}".overrideAttrs (oldAttrs: {
+              src = pgrxSrc or oldAttrs.src; # Use the provided fork or fall back to default
+            }))
             (rust-bin.stable.${rustVersion}.default.override {
               extensions = [ "rust-src" ];
             })
@@ -876,7 +878,13 @@
         };
         cargo-pgrx_0_12_7 = mkCargoPgrxDevShell {
           pgrxVersion = "0_12_7";
-          rustVersion = "1.80.0";
+          rustVersion = "1.84.0";
+          pgrxSrc = pkgs.fetchFromGitHub {
+            owner = "paradedb";
+            repo = "pgrx";
+            rev = "f251f1e#f251f1e24ee8c0f8d7ef40e1e4e03cd021a25204";
+            sha256 = "sha256-BnZWS7tYzibyGoJSHcBGoqRasaFVTvW/FM/YiXlfYZo=";
+          };
         };
       };     
   }
