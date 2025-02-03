@@ -6,15 +6,15 @@ in
 buildPgrxExtension_0_12_7 rec {
   pname = "paradedb";
   extension = "pg_search";
-  version = "0.14.1";
+  version = "0.15.0";
   inherit postgresql;
   cargoPackageFlags = ["--package pg_search"];
 
   src = fetchFromGitHub {
-    owner = "paradedb";
+    owner = "benan789";
     repo = pname;
     rev = "refs/tags/v${version}";
-    hash = "sha256-DcN8JTURk9N8Wq9tAZgRDUOZYLbdpMhdQ9BesDkqVcY=";
+    hash = "sha256-jdYMCDwmPFVv0mWDmkcNGtrcab4df1YB4nbGVLo60Ts=";
   };
 
   nativeBuildInputs = [ cargo ];
@@ -26,7 +26,7 @@ buildPgrxExtension_0_12_7 rec {
     lockFile = "${src}/Cargo.lock";
     allowBuiltinFetchGit = true;
     outputHashes = {
-      "tantivy-0.23.0" = "sha256-e/7yoGCZm5hB2G+EYNY3fFW6029uicG/QgnAFGqS5XY=";
+      "tantivy-0.23.0" = "sha256-LOmTk5/K8s9iMz1OHXgzCXBY5sVzA2WFyS+A9/SO9no=";
       "pgrx-0.12.7" = "sha256-BnZWS7tYzibyGoJSHcBGoqRasaFVTvW/FM/YiXlfYZo=";
       "tantivy-fst-0.5.0" = "sha256-YeHk7tlEE2jGxgLhqhZhFj8rtZ0bwQINNdLQDh4Mw7I=";
     };
@@ -41,7 +41,7 @@ buildPgrxExtension_0_12_7 rec {
     RUST_BACKTRACE = "full";
     CARGO_BUILD_OPTS = "--verbose"; 
   };
-  cargoHash = "sha256-DcN8JTURk9N8Wq9tAZgRDUOZYLbdpMhdQ9BesDkqVcY=";
+  cargoHash = "sha256-jdYMCDwmPFVv0mWDmkcNGtrcab4df1YB4nbGVLo60Ts=";
 
   # FIXME (aseipp): testsuite tries to write files into /nix/store; we'll have
   # to fix this a bit later.
