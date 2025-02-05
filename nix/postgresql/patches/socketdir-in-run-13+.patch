@@ -1,5 +1,14 @@
 --- a/src/include/pg_config_manual.h
 +++ b/src/include/pg_config_manual.h
+@@ -67,7 +67,7 @@
+  * Changing this requires an initdb.
+  */
+-#define INDEX_MAX_KEYS		32
++#define INDEX_MAX_KEYS   64
+
+ /*
+  * Maximum number of columns in a partition key
+  */
 @@ -201,7 +201,7 @@
   * support them yet.
   */
@@ -9,5 +18,3 @@
  #else
  #define DEFAULT_PGSOCKET_DIR ""
  #endif
--#define INDEX_MAX_KEYS		32
-+#define INDEX_MAX_KEYS	  64

@@ -1,12 +1,19 @@
 --- a/src/include/pg_config_manual.h
 +++ b/src/include/pg_config_manual.h
+@@ -50,7 +50,7 @@
+  * Changing this requires an initdb.
+  */
+-#define INDEX_MAX_KEYS		32
++#define INDEX_MAX_KEYS   64
+
+ /*
+  * Maximum number of columns in a partition key
 @@ -179,7 +179,7 @@
   * here's where to twiddle it.  You can also override this at runtime
   * with the postmaster's -k switch.
   */
 -#define DEFAULT_PGSOCKET_DIR  "/tmp"
 +#define DEFAULT_PGSOCKET_DIR  "/run/postgresql"
--#define INDEX_MAX_KEYS		32
-+#define INDEX_MAX_KEYS		64
+ 
  /*
   * This is the default event source for Windows event log.
