@@ -10,4 +10,4 @@
  #define DEFAULT_PGSOCKET_DIR ""
  #endif
 -#define INDEX_MAX_KEYS		32
-+#define INDEX_MAX_KEYS		80
++#define INDEX_MAX_KEYS	  64

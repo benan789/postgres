@@ -6,6 +6,7 @@
   */
 -#define DEFAULT_PGSOCKET_DIR  "/tmp"
 +#define DEFAULT_PGSOCKET_DIR  "/run/postgresql"
- 
+-#define INDEX_MAX_KEYS		32
++#define INDEX_MAX_KEYS		64
  /*
   * This is the default event source for Windows event log.
