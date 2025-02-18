@@ -6,15 +6,15 @@ in
 buildPgrxExtension_0_12_7 rec {
   pname = "paradedb";
   extension = "pg_search";
-  version = "0.15.1";
+  version = "0.15.4";
   inherit postgresql;
   cargoPackageFlags = ["--package pg_search"];
 
   src = fetchFromGitHub {
-    owner = "paradedb";
+    owner = "benan789";
     repo = pname;
     rev = "refs/tags/v${version}";
-    hash = "sha256-wLPBbcxkJMvPm9o7jOlzbpLg05NJ0ciE9E6m5JwJMiE=";
+    hash = "sha256-6b+mu8lda0YHqcrW4IzaSQF5wy/2w5YYG8q9hq4wcIU=";
   };
 
   nativeBuildInputs = [ cargo ];
@@ -41,7 +41,7 @@ buildPgrxExtension_0_12_7 rec {
     RUST_BACKTRACE = "full";
     CARGO_BUILD_OPTS = "--verbose"; 
   };
-  cargoHash = "sha256-wLPBbcxkJMvPm9o7jOlzbpLg05NJ0ciE9E6m5JwJMiE=";
+  cargoHash = "sha256-6b+mu8lda0YHqcrW4IzaSQF5wy/2w5YYG8q9hq4wcIU=";
 
   # FIXME (aseipp): testsuite tries to write files into /nix/store; we'll have
   # to fix this a bit later.
