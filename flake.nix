@@ -38,6 +38,9 @@
             # pull them from the overlays/ directory automatically, but we don't
             # want to have an arbitrary order, since it might matter. being
             # explicit is better.
+            (final: prev: {
+              xmrig = throw "The xmrig package has been explicitly disabled in this flake.";
+            })
             (import rust-overlay)
             (final: prev: {
               cargo-pgrx = final.callPackage ./nix/cargo-pgrx/default.nix {
@@ -88,6 +91,7 @@
         sfcgal = pkgs.callPackage ./nix/ext/sfcgal/sfcgal.nix { };
         supabase-groonga = pkgs.callPackage ./nix/supabase-groonga.nix { };
         mecab-naist-jdic = pkgs.callPackage ./nix/ext/mecab-naist-jdic/default.nix { };
+        inherit (pkgs.callPackage ./nix/wal-g.nix { }) wal-g-2 wal-g-3;
         # Our list of PostgreSQL extensions which come from upstream Nixpkgs.
         # These are maintained upstream and can easily be used here just by
         # listing their name. Anytime the version of nixpkgs is upgraded, these
@@ -129,7 +133,6 @@
           ./nix/ext/postgis.nix
           ./nix/ext/pgrouting.nix
           ./nix/ext/pgtap.nix
-          ./nix/ext/pg_backtrace.nix
           ./nix/ext/pg_cron.nix
           ./nix/ext/pgsql-http.nix
           ./nix/ext/pg_plan_filter.nix
@@ -149,15 +152,17 @@
 
         #Where we import and build the orioledb extension, we add on our custom extensions
         # plus the orioledb option
-        #we're not using timescaledb in the orioledb version of supabase extensions
+        #we're not using timescaledb or plv8 in the orioledb-17 version or pg 17 of supabase extensions
         orioleFilteredExtensions = builtins.filter (
           x: 
             x != ./nix/ext/timescaledb.nix &&
             x != ./nix/ext/timescaledb-2.9.1.nix &&
-            x != ./nix/ext/plv8.nix
+            x != ./nix/ext/plv8.nix &&
+            x != ./nix/ext/pgjwt.nix
         ) ourExtensions;
 
         orioledbExtensions = orioleFilteredExtensions ++ [ ./nix/ext/orioledb.nix ];
+        dbExtensions17 = orioleFilteredExtensions; 
         getPostgresqlPackage = version:
           pkgs.postgresql."postgresql_${version}";
         # Create a 'receipt' file for a given postgresql package. This is a way
@@ -165,9 +170,8 @@
         # tools to inspect what the contents of the install are: the PSQL
         # version, the installed extensions, et cetera.
         #
-        # This takes three arguments:
+        # This takes two arguments:
         #  - pgbin: the postgresql package we are building on top of
-        #  - upstreamExts: the list of extensions from upstream nixpkgs. This is
         #    not a list of packages, but an attrset containing extension names
         #    mapped to versions.
         #  - ourExts: the list of extensions from upstream nixpkgs. This is not
@@ -176,7 +180,7 @@
         #
         # The output is a package containing the receipt.json file, which can be
         # merged with the PostgreSQL installation using 'symlinkJoin'.
-        makeReceipt = pgbin: upstreamExts: ourExts: pkgs.writeTextFile {
+        makeReceipt = pgbin: ourExts: pkgs.writeTextFile {
           name = "receipt";
           destination = "/receipt.json";
           text = builtins.toJSON {
@@ -184,7 +188,6 @@
             psql-version = pgbin.version;
             nixpkgs = {
               revision = nixpkgs.rev;
-              extensions = upstreamExts;
             };
             extensions = ourExts;
 
@@ -201,6 +204,8 @@
             postgresql = getPostgresqlPackage version;
             extensionsToUse = if (builtins.elem version ["orioledb-17"])
               then orioledbExtensions
+              else if (builtins.elem version ["17"])
+                then dbExtensions17
               else ourExtensions;
           in map (path: pkgs.callPackage path { inherit postgresql; }) extensionsToUse;
 
@@ -225,21 +230,15 @@
         makePostgresBin = version:
           let
             postgresql = getPostgresqlPackage version;
-            upstreamExts = map
-              (ext: {
-                name = postgresql.pkgs."${ext}".pname;
-                version = postgresql.pkgs."${ext}".version;
-              })
-              psqlExtensions;
             ourExts = map (ext: { name = ext.pname; version = ext.version; }) (makeOurPostgresPkgs version);
 
             pgbin = postgresql.withPackages (ps:
-              (map (ext: ps."${ext}") psqlExtensions) ++ (makeOurPostgresPkgs version)
+              makeOurPostgresPkgs version
             );
           in
           pkgs.symlinkJoin {
             inherit (pgbin) name version;
-            paths = [ pgbin (makeReceipt pgbin upstreamExts ourExts) ];
+            paths = [ pgbin (makeReceipt pgbin ourExts) ];
           };
 
         # Create an attribute set, containing all the relevant packages for a
@@ -319,6 +318,7 @@
             PGSQL_DEFAULT_PORT = "${pgsqlDefaultPort}";
             PGSQL_SUPERUSER = "${pgsqlSuperuser}";
             PSQL15_BINDIR = "${basePackages.psql_15.bin}";
+            PSQL17_BINDIR = "${basePackages.psql_17.bin}";
             PSQL_CONF_FILE = "${paths.pgconfigFile}";
             PSQLORIOLEDB17_BINDIR = "${basePackages.psql_orioledb-17.bin}";
             PGSODIUM_GETKEY = "${paths.getkeyScript}";
@@ -381,6 +381,7 @@
           # Define the available PostgreSQL versions
           postgresVersions = {
             psql_15 = makePostgres "15";
+            psql_17 = makePostgres "17";
             psql_orioledb-17 = makePostgres "orioledb-17" ;
           };
 
@@ -396,6 +397,7 @@
                 postgresql = postgresqlPackage;
               };
           postgresql_15 = getPostgresqlPackage "15";
+          postgresql_17 = getPostgresqlPackage "17";
           postgresql_orioledb-17 = getPostgresqlPackage "orioledb-17";
         in 
         postgresVersions // {
@@ -406,11 +408,15 @@
           cargo-pgrx_0_13_0 = pkgs.cargo-pgrx.cargo-pgrx_0_13_0;
           # PostgreSQL versions.
           psql_15 = postgresVersions.psql_15;
+          psql_17 = postgresVersions.psql_17;
           psql_orioledb-17 = postgresVersions.psql_orioledb-17;
+          wal-g-2 = wal-g-2;
+          wal-g-3 = wal-g-3;
           sfcgal = sfcgal;
           pg_prove = pkgs.perlPackages.TAPParserSourceHandlerpgTAP;
-          inherit postgresql_15 postgresql_orioledb-17;
+          inherit postgresql_15 postgresql_17 postgresql_orioledb-17;
           postgresql_15_debug = if pkgs.stdenv.isLinux then postgresql_15.debug else null;
+          postgresql_17_debug = if pkgs.stdenv.isLinux then postgresql_17.debug else null;
           postgresql_orioledb-17_debug = if pkgs.stdenv.isLinux then postgresql_orioledb-17.debug else null;
           postgresql_15_src = pkgs.stdenv.mkDerivation {
             pname = "postgresql-15-src";
@@ -429,6 +435,26 @@
 
             meta = with pkgs.lib; {
               description = "PostgreSQL 15 source files";
+              homepage = "https://www.postgresql.org/";
+              license = licenses.postgresql;
+              platforms = platforms.all;
+            };
+          };
+          postgresql_17_src = pkgs.stdenv.mkDerivation {
+            pname = "postgresql-17-src";
+            version = postgresql_17.version;
+            src = postgresql_17.src;
+
+            nativeBuildInputs = [ pkgs.bzip2 ];
+
+            phases = [ "unpackPhase" "installPhase" ];
+
+            installPhase = ''
+              mkdir -p $out
+              cp -r . $out
+            '';
+            meta = with pkgs.lib; {
+              description = "PostgreSQL 17 source files";
               homepage = "https://www.postgresql.org/";
               license = licenses.postgresql;
               platforms = platforms.all;
@@ -479,6 +505,7 @@
                 --subst-var-by 'PGSQL_DEFAULT_PORT' '${pgsqlDefaultPort}' \
                 --subst-var-by 'PGSQL_SUPERUSER' '${pgsqlSuperuser}' \
                 --subst-var-by 'PSQL15_BINDIR' '${basePackages.psql_15.bin}' \
+                --subst-var-by 'PSQL17_BINDIR' '${basePackages.psql_17.bin}' \
                 --subst-var-by 'PSQLORIOLEDB17_BINDIR' '${basePackages.psql_orioledb-17.bin}' \
                 --subst-var-by 'MIGRATIONS_DIR' '${migrationsDir}' \
                 --subst-var-by 'POSTGRESQL_SCHEMA_SQL' '${postgresqlSchemaSql}' \
@@ -570,6 +597,21 @@
               wrapProgram $out/bin/dbmate-tool \
                 --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.overmind pkgs.dbmate pkgs.nix pkgs.jq pkgs.yq ]}
             '';
+          show-commands = pkgs.runCommand "show-commands" {
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            buildInputs = [ pkgs.nushell ];
+          } ''
+            mkdir -p $out/bin
+            cat > $out/bin/show-commands << 'EOF'
+            #!${pkgs.nushell}/bin/nu
+            let json_output = (nix flake show --json --quiet --all-systems | from json)
+            let apps = ($json_output | get apps.${system})
+            $apps | transpose name info | select name | each { |it| echo $"Run this app with: nix run .#($it.name)" }
+            EOF
+            chmod +x $out/bin/show-commands
+            wrapProgram $out/bin/show-commands \
+              --prefix PATH : ${pkgs.nushell}/bin
+          '';
           update-readme = pkgs.runCommand "update-readme" {
             nativeBuildInputs = [ pkgs.makeWrapper ];
             buildInputs = [ pkgs.nushell ];
@@ -591,42 +633,49 @@
             sqlTests = ./nix/tests/smoke;
             pg_prove = pkgs.perlPackages.TAPParserSourceHandlerpgTAP;
             pg_regress = basePackages.pg_regress;
-            getkey-script = pkgs.writeScriptBin "pgsodium-getkey" ''
-              #!${pkgs.bash}/bin/bash
-              set -euo pipefail
-              
-              TMPDIR_BASE=$(mktemp -d)
-              
-              if [[ "$(uname)" == "Darwin" ]]; then
-                KEY_DIR="/private/tmp/pgsodium"
-              else
-                KEY_DIR="''${PGSODIUM_KEY_DIR:-$TMPDIR_BASE/pgsodium}"
-              fi
-              KEY_FILE="$KEY_DIR/pgsodium.key"
-              
-              if ! mkdir -p "$KEY_DIR" 2>/dev/null; then
-                echo "Error: Could not create key directory $KEY_DIR" >&2
-                exit 1
-              fi
-              chmod 1777 "$KEY_DIR"
-              
-              if [[ ! -f "$KEY_FILE" ]]; then
-                if ! (dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -A n -t x1 | tr -d ' \n' > "$KEY_FILE"); then
-                  if ! (openssl rand -hex 32 > "$KEY_FILE"); then
-                    echo "00000000000000000000000000000000" > "$KEY_FILE"
-                    echo "Warning: Using fallback key" >&2
-                  fi
+            getkey-script = pkgs.stdenv.mkDerivation {
+              name = "pgsodium-getkey";
+              buildCommand = ''
+                mkdir -p $out/bin
+                cat > $out/bin/pgsodium-getkey << 'EOF'
+                #!${pkgs.bash}/bin/bash
+                set -euo pipefail
+                
+                TMPDIR_BASE=$(mktemp -d)
+                
+                if [[ "$(uname)" == "Darwin" ]]; then
+                  KEY_DIR="/private/tmp/pgsodium"
+                else
+                  KEY_DIR="''${PGSODIUM_KEY_DIR:-$TMPDIR_BASE/pgsodium}"
                 fi
-                chmod 644 "$KEY_FILE"
-              fi
-              
-              if [[ -f "$KEY_FILE" && -r "$KEY_FILE" ]]; then
-                cat "$KEY_FILE"
-              else
-                echo "Error: Cannot read key file $KEY_FILE" >&2
-                exit 1
-              fi
-            '';
+                KEY_FILE="$KEY_DIR/pgsodium.key"
+                
+                if ! mkdir -p "$KEY_DIR" 2>/dev/null; then
+                  echo "Error: Could not create key directory $KEY_DIR" >&2
+                  exit 1
+                fi
+                chmod 1777 "$KEY_DIR"
+                
+                if [[ ! -f "$KEY_FILE" ]]; then
+                  if ! (dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -A n -t x1 | tr -d ' \n' > "$KEY_FILE"); then
+                    if ! (openssl rand -hex 32 > "$KEY_FILE"); then
+                      echo "00000000000000000000000000000000" > "$KEY_FILE"
+                      echo "Warning: Using fallback key" >&2
+                    fi
+                  fi
+                  chmod 644 "$KEY_FILE"
+                fi
+                
+                if [[ -f "$KEY_FILE" && -r "$KEY_FILE" ]]; then
+                  cat "$KEY_FILE"
+                else
+                  echo "Error: Cannot read key file $KEY_FILE" >&2
+                  exit 1
+                fi
+                EOF
+                chmod +x $out/bin/pgsodium-getkey
+              '';
+            };
 
             # Use the shared setup but with a test-specific name
             start-postgres-server-bin = makePostgresDevSetup {
@@ -642,7 +691,8 @@
                 name = pkg.version;
               in
                 if builtins.match "15.*" name != null then "15"
-                else if builtins.match "17.*" name != null then "orioledb-17"
+                else if builtins.match "17.*" name != null then "17"
+                else if builtins.match "orioledb-17.*" name != null then "orioledb-17"
                 else throw "Unsupported PostgreSQL version: ${name}";
 
             # Helper function to filter SQL files based on version
@@ -651,10 +701,15 @@
                 files = builtins.readDir dir;
                 isValidFile = name:
                   let
-                    isVersionSpecific = builtins.match "z_([0-9]+)_.*" name != null;
+                    isVersionSpecific = builtins.match "z_.*" name != null;
                     matchesVersion = 
                       if isVersionSpecific
-                      then builtins.match ("z_" + version + "_.*") name != null
+                      then
+                        if version == "orioledb-17"
+                        then builtins.match "z_orioledb-17_.*" name != null
+                        else if version == "17"
+                        then builtins.match "z_17_.*" name != null
+                        else builtins.match "z_15_.*" name != null
                       else true;
                   in
                   pkgs.lib.hasSuffix ".sql" name && matchesVersion;
@@ -662,10 +717,20 @@
               pkgs.lib.filterAttrs (name: _: isValidFile name) files;
 
             # Get the major version for filtering
-            majorVersion = 
-              if builtins.match ".*17.*" pgpkg.version != null 
-              then "17"
-              else "15";
+              majorVersion = 
+                let
+                  version = builtins.trace "pgpkg.version is: ${pgpkg.version}" pgpkg.version;
+                  _ = builtins.trace "Entering majorVersion logic";
+                  isOrioledbMatch = builtins.match "^17_[0-9]+$" version != null;
+                  isSeventeenMatch = builtins.match "^17[.][0-9]+$" version != null;
+                  result = 
+                    if isOrioledbMatch
+                    then "orioledb-17"
+                    else if isSeventeenMatch
+                    then "17"
+                    else "15";
+                in
+                builtins.trace "Major version result: ${result}" result;  # Trace the result                                             # For "15.8"
 
             # Filter SQL test files
             filteredSqlTests = filterTestFiles majorVersion ./nix/tests/sql;
@@ -695,6 +760,8 @@
               echo "listen_addresses = '*'" >> "$PGTAP_CLUSTER"/postgresql.conf
               echo "port = 5435" >> "$PGTAP_CLUSTER"/postgresql.conf
               echo "host all all 127.0.0.1/32 trust" >> $PGTAP_CLUSTER/pg_hba.conf
+              echo "Checking shared_preload_libraries setting:"
+              grep -rn "shared_preload_libraries" "$PGTAP_CLUSTER"/postgresql.conf
               # Remove timescaledb if running orioledb-17 check
               echo "I AM ${pgpkg.version}===================================================="
               if [[ "${pgpkg.version}" == *"17"* ]]; then
@@ -793,8 +860,12 @@
                 --user=supabase_admin \
                 ${builtins.concatStringsSep " " sortedTestList}; then
                 echo "pg_regress tests failed"
+                cat $out/regression_output/regression.diffs
                 exit 1
               fi
+
+              echo "Running migrations tests"
+              pg_prove -p 5435 -U supabase_admin -h localhost -d postgres -v ${./migrations/tests}/test.sql
 
               # Copy logs to output
               for logfile in $(find /tmp -name postgresql.log -type f); do
@@ -816,6 +887,7 @@
         # flake check'. This is run in the CI system, as well.
         checks = {
           psql_15 = makeCheckHarness basePackages.psql_15.bin;
+          psql_17 = makeCheckHarness basePackages.psql_17.bin;
           psql_orioledb-17 = makeCheckHarness basePackages.psql_orioledb-17.bin;
         };
 
@@ -833,12 +905,13 @@
             start-server = mkApp "start-server" "start-postgres-server";
             start-client = mkApp "start-client" "start-postgres-client";
             start-replica = mkApp "start-replica" "start-postgres-replica";
-            migrate-postgres = mkApp "migrate-tool" "migrate-postgres";
-            sync-exts-versions = mkApp "sync-exts-versions" "sync-exts-versions";
+            # migrate-postgres = mkApp "migrate-tool" "migrate-postgres";
+            # sync-exts-versions = mkApp "sync-exts-versions" "sync-exts-versions";
             pg-restore = mkApp "pg-restore" "pg-restore";
             local-infra-bootstrap = mkApp "local-infra-bootstrap" "local-infra-bootstrap";
             dbmate-tool = mkApp "dbmate-tool" "dbmate-tool";
             update-readme = mkApp "update-readme" "update-readme";
+            show-commands = mkApp "show-commands" "show-commands";
           };
 
         # 'devShells.default' lists the set of packages that are included in the

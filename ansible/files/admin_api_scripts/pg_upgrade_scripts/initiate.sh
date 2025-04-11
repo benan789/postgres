@@ -12,6 +12,7 @@
 EXTENSIONS_TO_DISABLE=(
     "pg_graphql"
     "pg_stat_monitor"
+    "pg_backtrace"
 )
 
 PG14_EXTENSIONS_TO_DISABLE=(
@@ -213,12 +214,18 @@ function initiate_upgrade {
     if [[ "$OLD_PGVERSION" =~ 14* ]]; then
         SHARED_PRELOAD_LIBRARIES=$(echo "$SHARED_PRELOAD_LIBRARIES" | sed "s/wrappers//" | xargs)
     fi
+
+    # Timescale is no longer supported for PG17+ upgrades
+    if [[ "$PGVERSION" != "15" ]]; then
+        SHARED_PRELOAD_LIBRARIES=$(echo "$SHARED_PRELOAD_LIBRARIES" | sed "s/timescaledb//" | xargs)
+    fi
+    
     SHARED_PRELOAD_LIBRARIES=$(echo "$SHARED_PRELOAD_LIBRARIES" | sed "s/pg_cron//" | xargs)
     SHARED_PRELOAD_LIBRARIES=$(echo "$SHARED_PRELOAD_LIBRARIES" | sed "s/pg_net//" | xargs)
     SHARED_PRELOAD_LIBRARIES=$(echo "$SHARED_PRELOAD_LIBRARIES" | sed "s/check_role_membership//" | xargs)
     SHARED_PRELOAD_LIBRARIES=$(echo "$SHARED_PRELOAD_LIBRARIES" | sed "s/safeupdate//" | xargs)
     SHARED_PRELOAD_LIBRARIES=$(echo "$SHARED_PRELOAD_LIBRARIES" | sed "s/pg_search//" | xargs)
-
+    SHARED_PRELOAD_LIBRARIES=$(echo "$SHARED_PRELOAD_LIBRARIES" | sed "s/pg_backtrace//" | xargs)
 
     # Exclude empty-string entries, as well as leading/trailing commas and spaces resulting from the above lib exclusions
     #  i.e. " , pg_stat_statements, , pgsodium, " -> "pg_stat_statements, pgsodium"
@@ -289,7 +296,7 @@ function initiate_upgrade {
         # shellcheck disable=SC1091
         source /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
         nix-collect-garbage -d > /tmp/pg_upgrade-nix-gc.log 2>&1 || true
-        PG_UPGRADE_BIN_DIR=$(nix build "github:supabase/postgres/${NIX_FLAKE_VERSION}#psql_15/bin" --no-link --print-out-paths --extra-experimental-features nix-command --extra-experimental-features flakes)
+        PG_UPGRADE_BIN_DIR=$(nix build "github:supabase/postgres/${NIX_FLAKE_VERSION}#psql_${PGVERSION}/bin" --no-link --print-out-paths --extra-experimental-features nix-command --extra-experimental-features flakes)
         PGSHARENEW="$PG_UPGRADE_BIN_DIR/share/postgresql"
     fi
 
