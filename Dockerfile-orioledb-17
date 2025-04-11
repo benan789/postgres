@@ -67,7 +67,7 @@ COPY . /nixpg
 
 WORKDIR /nixpg
 
-RUN nix profile install .#psql_orioledb-17/bin --debug -vvvvv
+RUN nix profile install .#psql_orioledb-17/bin
 
 
 

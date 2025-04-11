@@ -73,6 +73,10 @@
                 cargo-pgrx = final.cargo-pgrx.cargo-pgrx_0_12_9;
               };
 
+              buildPgrxExtension_0_13_0 = prev.buildPgrxExtension.override {
+                cargo-pgrx = final.cargo-pgrx.cargo-pgrx_0_13_0;
+              };
+
             })
             (final: prev: {
               postgresql = final.callPackage ./nix/postgresql/default.nix {
@@ -399,6 +403,7 @@
           cargo-pgrx_0_11_3 = pkgs.cargo-pgrx.cargo-pgrx_0_11_3;
           cargo-pgrx_0_12_6 = pkgs.cargo-pgrx.cargo-pgrx_0_12_6;
           cargo-pgrx_0_12_9 = pkgs.cargo-pgrx.cargo-pgrx_0_12_9;
+          cargo-pgrx_0_13_0 = pkgs.cargo-pgrx.cargo-pgrx_0_13_0;
           # PostgreSQL versions.
           psql_15 = postgresVersions.psql_15;
           psql_orioledb-17 = postgresVersions.psql_orioledb-17;
@@ -889,15 +894,9 @@
           pgrxVersion = "0_12_6";
           rustVersion = "1.80.0";
         };
-        cargo-pgrx_0_12_7 = mkCargoPgrxDevShell {
-          pgrxVersion = "0_12_7";
-          rustVersion = "1.84.0";
-          pgrxSrc = pkgs.fetchFromGitHub {
-            owner = "paradedb";
-            repo = "pgrx";
-            rev = "f251f1e#f251f1e24ee8c0f8d7ef40e1e4e03cd021a25204";
-            sha256 = "sha256-BnZWS7tYzibyGoJSHcBGoqRasaFVTvW/FM/YiXlfYZo=";
-          };
+        cargo-pgrx_0_13_0 = mkCargoPgrxDevShell {
+          pgrxVersion = "0_13_0";
+          rustVersion = "1.85.0";
         };
       };     
   }

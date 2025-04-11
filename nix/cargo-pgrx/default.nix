@@ -8,7 +8,7 @@
 , rust-bin
 }:
 let
-  rustVersion = "1.76.0";
+  rustVersion = "1.85.0";
   rustPlatform = makeRustPlatform {
     cargo = rust-bin.stable.${rustVersion}.default;
     rustc = rust-bin.stable.${rustVersion}.default;
@@ -70,6 +70,11 @@ in
     version = "0.12.9";
     hash = "sha256-aR3DZAjeEEAjLQfZ0ZxkjLqTVMIEbU0UiZ62T4BkQq8=";
     cargoHash = "sha256-53HKhvsKLTa2JCByLEcK3UzWXoM+LTatd98zvS1C9no=";
+  };
+  cargo-pgrx_0_13_0 = generic {
+    version = "0.13.0";
+    hash = "sha256-lbABIBbPa6R0JuS1kRUYVgtc03KTpEjWA1L8uSgsNrg=";
+    cargoHash = "sha256-zLko5ivcRb6ApZLwTxf45Dhriolxb2uxzOgk4H6cP0w=";
   };
   inherit rustPlatform;
 }
