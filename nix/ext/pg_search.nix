@@ -1,12 +1,12 @@
-{ lib, stdenv, fetchFromGitHub, openssl, postgresql, buildPgrxExtension_0_13_0, cargo, rust-bin }:
+{ lib, stdenv, fetchFromGitHub, openssl, postgresql, buildPgrxExtension_0_14_3, cargo, rust-bin }:
 let
-  rustVersion = "1.85.0";
+  rustVersion = "1.85.1";
   cargo = rust-bin.stable.${rustVersion}.default;
 in
-buildPgrxExtension_0_13_0 rec {
+buildPgrxExtension_0_14_3 rec {
   pname = "paradedb";
   extension = "pg_search";
-  version = "0.15.16";
+  version = "0.16.2";
   inherit postgresql;
   cargoPackageFlags = ["--package pg_search"];
 
