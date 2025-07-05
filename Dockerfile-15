@@ -65,7 +65,7 @@ COPY . /nixpg
 
 WORKDIR /nixpg
 
-RUN nix profile install .#psql_15/bin --debug -vvvvv
+RUN nix profile install .#psql_15/bin
 
 RUN nix store gc
 

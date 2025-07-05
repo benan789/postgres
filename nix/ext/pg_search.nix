@@ -1,9 +1,9 @@
-{ lib, stdenv, fetchFromGitHub, openssl, postgresql, buildPgrxExtension_0_14_3, cargo, rust-bin }:
+{ lib, stdenv, fetchFromGitHub, openssl, postgresql, buildPgrxExtension_0_15_0, cargo, rust-bin }:
 let
-  rustVersion = "1.85.1";
+  rustVersion = "1.88.0";
   cargo = rust-bin.stable.${rustVersion}.default;
 in
-buildPgrxExtension_0_14_3 rec {
+buildPgrxExtension_0_15_0 rec {
   pname = "paradedb";
   extension = "pg_search";
   version = "0.16.2";
@@ -11,10 +11,10 @@ buildPgrxExtension_0_14_3 rec {
   cargoPackageFlags = ["--package pg_search"];
 
   src = fetchFromGitHub {
-    owner = "benan789";
+    owner = "paradedb";
     repo = pname;
     rev = "refs/tags/v${version}";
-    hash = "sha256-j8h1Gj7P5JVPkd1Y58mLOg6lwvu9p3B2xJdqOxlQ+eM=";
+    hash = "sha256-mo4OsuCtFuGkefeKyU05mE+uF8x/7J+Ndylf4lJOaVw=";
   };
 
   nativeBuildInputs = [ cargo ];
@@ -26,7 +26,7 @@ buildPgrxExtension_0_14_3 rec {
     lockFile = "${src}/Cargo.lock";
     allowBuiltinFetchGit = true;
     outputHashes = {
-      "tantivy-0.23.0" = "sha256-qajvgcNsmoL2tag7BPq5XM/D1pOp9aOcIoE9IkVgF9s=";
+      "tantivy-0.23.0" = "sha256-CD0dgLB3tilkZ4PkEjGsGjP7oE/cHqRVXecJckWlT/o=";
       "rust_icu_sys-5.0.0" = "sha256-5IinVaGLay6FWj6SLF1lGkCzRjTaf9vJuInXzMZkkRs=";
       "tantivy-fst-0.5.0" = "sha256-YeHk7tlEE2jGxgLhqhZhFj8rtZ0bwQINNdLQDh4Mw7I=";
     };
@@ -41,7 +41,7 @@ buildPgrxExtension_0_14_3 rec {
     RUST_BACKTRACE = "full";
     CARGO_BUILD_OPTS = "--verbose"; 
   };
-  cargoHash = "sha256-j8h1Gj7P5JVPkd1Y58mLOg6lwvu9p3B2xJdqOxlQ+eM=";
+  cargoHash = "sha256-mo4OsuCtFuGkefeKyU05mE+uF8x/7J+Ndylf4lJOaVw=";
 
   # FIXME (aseipp): testsuite tries to write files into /nix/store; we'll have
   # to fix this a bit later.

@@ -77,6 +77,10 @@
                 cargo-pgrx = final.cargo-pgrx.cargo-pgrx_0_12_9;
               };
 
+              buildPgrxExtension_0_15_0 = prev.buildPgrxExtension.override {
+                cargo-pgrx = final.cargo-pgrx.cargo-pgrx_0_15_0;
+              };
+
               buildPgrxExtension_0_14_3 = prev.buildPgrxExtension.override {
                 cargo-pgrx = final.cargo-pgrx.cargo-pgrx_0_14_3;
               };
@@ -421,6 +425,7 @@
             cargo-pgrx_0_11_3 = pkgs.cargo-pgrx.cargo-pgrx_0_11_3;
             cargo-pgrx_0_12_6 = pkgs.cargo-pgrx.cargo-pgrx_0_12_6;
             cargo-pgrx_0_12_9 = pkgs.cargo-pgrx.cargo-pgrx_0_12_9;
+            cargo-pgrx_0_15_0 = pkgs.cargo-pgrx.cargo-pgrx_0_15_0;
             cargo-pgrx_0_14_3 = pkgs.cargo-pgrx.cargo-pgrx_0_14_3;
             # PostgreSQL versions.
             psql_15 = postgresVersions.psql_15;
