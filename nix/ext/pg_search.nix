@@ -6,7 +6,7 @@ in
 buildPgrxExtension_0_15_0 rec {
   pname = "paradedb";
   extension = "pg_search";
-  version = "0.16.2";
+  version = "0.17.2";
   inherit postgresql;
   cargoPackageFlags = ["--package pg_search"];
 
