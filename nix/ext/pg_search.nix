@@ -14,7 +14,7 @@ buildPgrxExtension_0_15_0 rec {
     owner = "paradedb";
     repo = pname;
     rev = "refs/tags/v${version}";
-    hash = "sha256-mo4OsuCtFuGkefeKyU05mE+uF8x/7J+Ndylf4lJOaVw=";
+    hash = "sha256-GXSxJjrq/4tusQh8Gw2tUPuhU3tPwbj5F9EJkl+mCtw=";
   };
 
   nativeBuildInputs = [ cargo ];
@@ -26,7 +26,7 @@ buildPgrxExtension_0_15_0 rec {
     lockFile = "${src}/Cargo.lock";
     allowBuiltinFetchGit = true;
     outputHashes = {
-      "tantivy-0.23.0" = "sha256-CD0dgLB3tilkZ4PkEjGsGjP7oE/cHqRVXecJckWlT/o=";
+      "tantivy-0.23.0" = "sha256-bDw9jRB7fg7Gt/PY7VhGJVCUyoI3S7nXrNjou7GVpp8=";
       "rust_icu_sys-5.0.0" = "sha256-5IinVaGLay6FWj6SLF1lGkCzRjTaf9vJuInXzMZkkRs=";
       "tantivy-fst-0.5.0" = "sha256-YeHk7tlEE2jGxgLhqhZhFj8rtZ0bwQINNdLQDh4Mw7I=";
     };
@@ -41,7 +41,7 @@ buildPgrxExtension_0_15_0 rec {
     RUST_BACKTRACE = "full";
     CARGO_BUILD_OPTS = "--verbose"; 
   };
-  cargoHash = "sha256-mo4OsuCtFuGkefeKyU05mE+uF8x/7J+Ndylf4lJOaVw=";
+  cargoHash = "sha256-GXSxJjrq/4tusQh8Gw2tUPuhU3tPwbj5F9EJkl+mCtw=";
 
   # FIXME (aseipp): testsuite tries to write files into /nix/store; we'll have
   # to fix this a bit later.
