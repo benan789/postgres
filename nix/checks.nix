@@ -294,6 +294,7 @@
             wal-g-2
             wal-g-3
             dbmate-tool
+            packer
             pg_regress
             ;
         }
@@ -307,12 +308,14 @@
             postgresql_17_src
             ;
         }
-        // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
-          wrappers = import ./ext/tests/wrappers.nix {
+        // pkgs.lib.optionalAttrs (system == "x86_64-linux") (
+          {
+            devShell = self'.devShells.default;
+          }
+          // (import ./ext/tests {
             inherit self;
             inherit pkgs;
-          };
-          devShell = self'.devShells.default;
-        };
+          })
+        );
     };
 }
