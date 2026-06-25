@@ -7,9 +7,11 @@
   pkg-config,
   postgresql,
   buildEnv,
-  darwin,
+  makeWrapper,
+  switch-ext-version,
   rust-bin,
   git,
+  latestOnly ? false,
 }:
 let
   pname = "wrappers";
@@ -37,16 +39,10 @@ let
           cargo
           git
         ];
-        buildInputs =
-          [
-            openssl
-            postgresql
-          ]
-          ++ lib.optionals stdenv.isDarwin [
-            darwin.apple_sdk.frameworks.CoreFoundation
-            darwin.apple_sdk.frameworks.Security
-            darwin.apple_sdk.frameworks.SystemConfiguration
-          ];
+        buildInputs = [
+          openssl
+          postgresql
+        ];
 
         NIX_LDFLAGS = "-L${postgresql}/lib -lpq";
 
@@ -82,6 +78,39 @@ let
               {
                 "clickhouse-rs-1.1.0-alpha.1" = "sha256-nKiGzdsAgJej8NgyVOqHaD1sZLrNF1RPfEhu2pRwZ6o=";
                 "iceberg-catalog-s3tables-0.5.1" = "sha256-1JkB2JExukABlbW1lZPolNQCYb9URi8xNYY3APmiGq0=";
+              }
+            else if builtins.compareVersions "0.5.4" version == 0 then
+              {
+                "clickhouse-rs-1.1.0-alpha.1" = "sha256-nKiGzdsAgJej8NgyVOqHaD1sZLrNF1RPfEhu2pRwZ6o=";
+                "iceberg-catalog-s3tables-0.5.1" = "sha256-1JkB2JExukABlbW1lZPolNQCYb9URi8xNYY3APmiGq0=";
+              }
+            else if builtins.compareVersions "0.5.5" version == 0 then
+              {
+                "clickhouse-rs-1.1.0-alpha.1" = "sha256-nKiGzdsAgJej8NgyVOqHaD1sZLrNF1RPfEhu2pRwZ6o=";
+                "iceberg-catalog-s3tables-0.6.0" = "sha256-AUK7B0wMqQZwJho91woLs8uOC4k1RdUEEN5Khw2OoqQ=";
+              }
+            else if builtins.compareVersions "0.5.6" version == 0 then
+              {
+                "clickhouse-rs-1.1.0-alpha.1" = "sha256-nKiGzdsAgJej8NgyVOqHaD1sZLrNF1RPfEhu2pRwZ6o=";
+                "iceberg-catalog-s3tables-0.6.0" = "sha256-AUK7B0wMqQZwJho91woLs8uOC4k1RdUEEN5Khw2OoqQ=";
+              }
+            else if builtins.compareVersions "0.5.7" version == 0 then
+              {
+                "clickhouse-rs-1.1.0-alpha.1" = "sha256-nKiGzdsAgJej8NgyVOqHaD1sZLrNF1RPfEhu2pRwZ6o=";
+                "iceberg-catalog-s3tables-0.6.0" = "sha256-AUK7B0wMqQZwJho91woLs8uOC4k1RdUEEN5Khw2OoqQ=";
+              }
+            else if builtins.compareVersions "0.6.0" version == 0 then
+              {
+                "clickhouse-rs-1.1.0-alpha.1" = "sha256-nKiGzdsAgJej8NgyVOqHaD1sZLrNF1RPfEhu2pRwZ6o=";
+                "iceberg-catalog-s3tables-0.6.0" = "sha256-AUK7B0wMqQZwJho91woLs8uOC4k1RdUEEN5Khw2OoqQ=";
+              }
+            else if builtins.compareVersions "0.6.1" version == 0 then
+              {
+                "clickhouse-rs-1.1.0-alpha.1" = "sha256-3CIKx0/imCCXl1VGUAX0E9TqbsZSTEdCpe4ps5p6Ax4=";
+              }
+            else if builtins.compareVersions "0.6.2" version == 0 then
+              {
+                "clickhouse-rs-1.1.0-alpha.1" = "sha256-3CIKx0/imCCXl1VGUAX0E9TqbsZSTEdCpe4ps5p6Ax4=";
               }
             else
               {
@@ -133,6 +162,7 @@ let
         doCheck = false;
 
         postInstall = ''
+
           create_control_files() {
             sed -e "/^default_version =/d" \
                 -e "s|^module_pathname = .*|module_pathname = '\$libdir/${pname}-${version}'|" \
@@ -161,7 +191,14 @@ let
         };
       }
     );
-  previouslyPackagedVersions = [
+  # All versions that were previously packaged (historical list)
+  allPreviouslyPackagedVersions = [
+    "0.6.1"
+    "0.6.0"
+    "0.5.7"
+    "0.5.6"
+    "0.5.5"
+    "0.5.4"
     "0.5.3"
     "0.5.2"
     "0.5.1"
@@ -172,8 +209,6 @@ let
     "0.4.3"
     "0.4.2"
     "0.4.1"
-    "0.4.0"
-    "0.3.1"
     "0.3.0"
     "0.2.0"
     "0.1.19"
@@ -194,7 +229,6 @@ let
     "0.1.1"
     "0.1.0"
   ];
-  numberOfPreviouslyPackagedVersions = builtins.length previouslyPackagedVersions;
   allVersions = (builtins.fromJSON (builtins.readFile ../versions.json)).wrappers;
   supportedVersions = lib.filterAttrs (
     _: value: builtins.elem (lib.versions.major postgresql.version) value.postgresql
@@ -202,18 +236,35 @@ let
   versions = lib.naturalSort (lib.attrNames supportedVersions);
   latestVersion = lib.last versions;
   numberOfVersions = builtins.length versions;
-  packages = builtins.attrValues (
-    lib.mapAttrs (name: value: build name value.hash value.rust value.pgrx) supportedVersions
-  );
+  versionsToUse =
+    if latestOnly then
+      lib.filterAttrs (n: _: n == latestVersion) supportedVersions
+    else
+      supportedVersions;
+  versionsBuilt = if latestOnly then [ latestVersion ] else versions;
+  numberOfVersionsBuilt = builtins.length versionsBuilt;
+  # Filter out previously packaged versions that are actually built for this PG version
+  # This prevents double-counting when a version appears in both lists
+  previouslyPackagedVersions = builtins.filter (
+    v: !(builtins.elem v versions)
+  ) allPreviouslyPackagedVersions;
+  numberOfPreviouslyPackagedVersions = builtins.length previouslyPackagedVersions;
+  packagesAttrSet = lib.mapAttrs' (name: value: {
+    name = lib.replaceStrings [ "." ] [ "_" ] name;
+    value = build name value.hash value.rust value.pgrx;
+  }) versionsToUse;
+  packages = builtins.attrValues packagesAttrSet;
 in
-buildEnv {
+(buildEnv {
   name = pname;
   paths = packages;
+  nativeBuildInputs = [ makeWrapper ];
   pathsToLink = [
     "/lib"
     "/share/postgresql/extension"
   ];
   postBuild = ''
+
     create_control_files() {
       # Create main control file pointing to latest version
       {
@@ -226,41 +277,110 @@ buildEnv {
       # Create main library symlink to latest version
       ln -sfn ${pname}-${latestVersion}${postgresql.dlSuffix} $out/lib/${pname}${postgresql.dlSuffix}
 
-      # Create symlinks for all previously packaged versions to main library
-      for v in ${lib.concatStringsSep " " previouslyPackagedVersions}; do
-        ln -sfn $out/lib/${pname}${postgresql.dlSuffix} $out/lib/${pname}-$v${postgresql.dlSuffix}
-      done
+      ${
+        if latestOnly then
+          ''
+            # latestOnly mode: skip previouslyPackagedVersions symlinks
+          ''
+        else
+          ''
+            # Create symlinks for all previously packaged versions to main library
+            for v in ${lib.concatStringsSep " " previouslyPackagedVersions}; do
+              ln -sfn $out/lib/${pname}${postgresql.dlSuffix} $out/lib/${pname}-$v${postgresql.dlSuffix}
+            done
+          ''
+      }
     }
 
-    create_migration_sql_files() {
-      # Create migration SQL files from previous versions to newer versions
-      for prev_version in ${lib.concatStringsSep " " previouslyPackagedVersions}; do
-        for curr_version in ${lib.concatStringsSep " " versions}; do
-          if [[ "$(printf '%s\n%s' "$prev_version" "$curr_version" | sort -V | head -n1)" == "$prev_version" ]] && [[ "$prev_version" != "$curr_version" ]]; then
-            main_sql_file="$out/share/postgresql/extension/wrappers--$curr_version.sql"
-            if [ -f "$main_sql_file" ]; then
-              new_file="$out/share/postgresql/extension/wrappers--$prev_version--$curr_version.sql"
-              cp "$main_sql_file" "$new_file"
-              sed -i 's|$libdir/wrappers-[0-9.]*|$libdir/wrappers|g' "$new_file"
-            fi
-          fi
-        done
-      done
+    ${
+      if latestOnly then
+        ''
+          # latestOnly mode: skip migration SQL files entirely
+        ''
+      else
+        ''
+          create_migration_sql_files() {
+
+
+            PREVIOUS_VERSION=""
+            while IFS= read -r i; do
+              FILENAME=$(basename "$i")
+              VERSION="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' <<< $FILENAME)"
+              if [[ "$PREVIOUS_VERSION" != "" ]]; then
+                # Always write to $out/share/postgresql/extension, not $DIRNAME
+                # because $DIRNAME might be a symlinked read-only path from the Nix store
+                # We use -L with cp to dereference symlinks (copy the actual file content, not the symlink)
+                MIGRATION_FILENAME="$out/share/postgresql/extension/''${FILENAME/$VERSION/$PREVIOUS_VERSION--$VERSION}"
+                cp -L "$i" "$MIGRATION_FILENAME"
+              fi
+              PREVIOUS_VERSION="$VERSION"
+            done < <(find $out -name '*.sql' | sort -V)
+
+            # Create empty SQL files for previously packaged versions that don't exist
+            # This compensates for versions that failed to produce SQL files in the past
+            for prev_version in ${lib.concatStringsSep " " previouslyPackagedVersions}; do
+              sql_file="$out/share/postgresql/extension/wrappers--$prev_version.sql"
+              if [ ! -f "$sql_file" ]; then
+                echo "-- Empty migration file for previously packaged version $prev_version" > "$sql_file"
+              fi
+            done
+
+            # Create migration SQL files from previous versions to newer versions
+            # Skip if the migration file already exists (to avoid conflicts with the first loop)
+            for prev_version in ${lib.concatStringsSep " " previouslyPackagedVersions}; do
+              for curr_version in ${lib.concatStringsSep " " versions}; do
+                if [[ "$(printf '%s\n%s' "$prev_version" "$curr_version" | sort -V | head -n1)" == "$prev_version" ]] && [[ "$prev_version" != "$curr_version" ]]; then
+                  main_sql_file="$out/share/postgresql/extension/wrappers--$curr_version.sql"
+                  new_file="$out/share/postgresql/extension/wrappers--$prev_version--$curr_version.sql"
+                  # Only create if it doesn't already exist (first loop may have created it)
+                  if [ -f "$main_sql_file" ] && [ ! -f "$new_file" ]; then
+                    cp "$main_sql_file" "$new_file"
+                    sed -i 's|$libdir/wrappers-[0-9.]*|$libdir/wrappers|g' "$new_file"
+                  fi
+                fi
+              done
+            done
+          }
+        ''
     }
 
     create_control_files
     create_lib_files
-    create_migration_sql_files
+    ${if latestOnly then "" else "create_migration_sql_files"}
 
-    # checks
-    (test "$(ls -A $out/lib/${pname}*${postgresql.dlSuffix} | wc -l)" = "${
-      toString (numberOfVersions + numberOfPreviouslyPackagedVersions + 1)
-    }")
+    makeWrapper ${lib.getExe switch-ext-version} $out/bin/switch_${pname}_version \
+      --prefix EXT_WRAPPER : "$out" --prefix EXT_NAME : "${pname}"
+
+    # Verify library count matches expected
+    ${
+      if latestOnly then
+        ''
+          (test "$(ls -A $out/lib/${pname}*${postgresql.dlSuffix} | wc -l)" = "2")
+        ''
+      else
+        ''
+          (test "$(ls -A $out/lib/${pname}*${postgresql.dlSuffix} | wc -l)" = "${
+            toString (numberOfVersions + numberOfPreviouslyPackagedVersions + 1)
+          }")
+        ''
+    }
   '';
   passthru = {
-    inherit versions numberOfVersions;
-    pname = "${pname}-all";
+    versions = versionsBuilt;
+    numberOfVersions = numberOfVersionsBuilt;
+    pname = "${pname}";
+    inherit latestOnly;
     version =
-      "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
+      if latestOnly then
+        latestVersion
+      else
+        "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
+    # Expose individual packages for CI to build separately
+    packages = packagesAttrSet // {
+      recurseForDerivations = true;
+    };
   };
-}
+}).overrideAttrs
+  (_: {
+    requiredSystemFeatures = [ "big-parallel" ];
+  })

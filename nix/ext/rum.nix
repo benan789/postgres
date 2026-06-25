@@ -4,6 +4,9 @@
   fetchFromGitHub,
   postgresql,
   buildEnv,
+  makeWrapper,
+  switch-ext-version,
+  latestOnly ? false,
 }:
 let
   pname = "rum";
@@ -19,9 +22,15 @@ let
   # Derived version information
   versions = lib.naturalSort (lib.attrNames supportedVersions);
   latestVersion = lib.last versions;
-  numberOfVersions = builtins.length versions;
+  versionsToUse =
+    if latestOnly then
+      { "${latestVersion}" = supportedVersions.${latestVersion}; }
+    else
+      supportedVersions;
+  versionsBuilt = if latestOnly then [ latestVersion ] else versions;
+  numberOfVersionsBuilt = builtins.length versionsBuilt;
   packages = builtins.attrValues (
-    lib.mapAttrs (name: value: build name value.hash value.revision) supportedVersions
+    lib.mapAttrs (name: value: build name value.hash value.revision) versionsToUse
   );
 
   # Build function for individual versions
@@ -74,6 +83,7 @@ in
 buildEnv {
   name = pname;
   paths = packages;
+  nativeBuildInputs = [ makeWrapper ];
 
   pathsToLink = [
     "/lib"
@@ -82,7 +92,7 @@ buildEnv {
 
   postBuild = ''
     # Verify all expected library files are present
-    expectedFiles=${toString (numberOfVersions + 1)}
+    expectedFiles=${toString (numberOfVersionsBuilt + 1)}
     actualFiles=$(ls -l $out/lib/${pname}*${postgresql.dlSuffix} | wc -l)
 
     if [[ "$actualFiles" != "$expectedFiles" ]]; then
@@ -91,12 +101,19 @@ buildEnv {
       ls -la $out/lib/*${postgresql.dlSuffix} || true
       exit 1
     fi
+
+    makeWrapper ${lib.getExe switch-ext-version} $out/bin/switch_${pname}_version \
+      --prefix EXT_WRAPPER : "$out" --prefix EXT_NAME : "${pname}"
   '';
 
   passthru = {
-    inherit versions numberOfVersions;
-    pname = "${pname}-all";
+    versions = versionsBuilt;
+    numberOfVersions = numberOfVersionsBuilt;
+    inherit pname latestOnly;
     version =
-      "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
+      if latestOnly then
+        latestVersion
+      else
+        "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
   };
 }

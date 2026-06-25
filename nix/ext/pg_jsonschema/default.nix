@@ -6,7 +6,9 @@
   fetchFromGitHub,
   postgresql,
   rust-bin,
-  darwin,
+  makeWrapper,
+  switch-ext-version,
+  latestOnly ? false,
 }:
 let
   pname = "pg_jsonschema";
@@ -43,12 +45,9 @@ let
           "";
 
       nativeBuildInputs = [ cargo ];
-      buildInputs = [
-        postgresql
-      ] ++ lib.optionals stdenv.isDarwin [ darwin.apple_sdk.frameworks.SystemConfiguration ];
+      buildInputs = [ postgresql ];
       # update the following array when the pg_jsonschema version is updated
       # required to ensure that extensions update scripts from previous versions are generated
-
       previousVersions = [
         "0.3.1"
         "0.3.0"
@@ -84,7 +83,17 @@ let
         cargo pgrx init --pg${lib.versions.major postgresql.version} $PGRX_HOME/${lib.versions.major postgresql.version}/bin/pg_config
       '';
 
-      doCheck = true;
+      # Tests are disabled for specific versions because pgrx tests require
+      # `cargo pgrx install --test` which fails in the nix sandbox due to
+      # write permission restrictions. Unlike pg_graphql which has a custom
+      # installcheck script, pg_jsonschema only has pgrx cargo tests.
+      # See: https://github.com/supabase/pg_jsonschema/blob/v0.3.3/src/lib.rs#L45-L195
+      doCheck =
+        !(builtins.elem version [
+          "0.2.0"
+          "0.3.1"
+          "0.3.3"
+        ]);
 
       preBuild = ''
         echo "Processing git tags..."
@@ -125,14 +134,21 @@ let
   ) allVersions;
   versions = lib.naturalSort (lib.attrNames supportedVersions);
   latestVersion = lib.last versions;
-  numberOfVersions = builtins.length versions;
+  versionsToUse =
+    if latestOnly then
+      { "${latestVersion}" = supportedVersions.${latestVersion}; }
+    else
+      supportedVersions;
   packages = builtins.attrValues (
-    lib.mapAttrs (name: value: build name value.hash value.rust value.pgrx) supportedVersions
+    lib.mapAttrs (name: value: build name value.hash value.rust value.pgrx) versionsToUse
   );
+  versionsBuilt = if latestOnly then [ latestVersion ] else versions;
+  numberOfVersionsBuilt = builtins.length versionsBuilt;
 in
-pkgs.buildEnv {
+(pkgs.buildEnv {
   name = pname;
   paths = packages;
+  nativeBuildInputs = [ makeWrapper ];
   pathsToLink = [
     "/lib"
     "/share/postgresql/extension"
@@ -141,7 +157,7 @@ pkgs.buildEnv {
     # checks
     (set -x
        test "$(ls -A $out/lib/${pname}*${postgresql.dlSuffix} | wc -l)" = "${
-         toString (numberOfVersions + 1)
+         toString (numberOfVersionsBuilt + 1)
        }"
     )
 
@@ -162,12 +178,22 @@ pkgs.buildEnv {
     }
 
     create_sql_files
+
+    makeWrapper ${lib.getExe switch-ext-version} $out/bin/switch_${pname}_version \
+      --prefix EXT_WRAPPER : "$out" --prefix EXT_NAME : "${pname}"
   '';
 
   passthru = {
-    inherit versions numberOfVersions;
-    pname = "${pname}-all";
+    versions = versionsBuilt;
+    numberOfVersions = numberOfVersionsBuilt;
+    inherit pname latestOnly;
     version =
-      "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
+      if latestOnly then
+        latestVersion
+      else
+        "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
   };
-}
+}).overrideAttrs
+  (_: {
+    requiredSystemFeatures = [ "big-parallel" ];
+  })

@@ -26,6 +26,12 @@
     - set_fact:
         parallel_jobs: 16
 
+    - name: Install tuned
+      import_tasks: tasks/setup-tuned.yml
+
+    - name: Install tmux
+      import_tasks: tasks/setup-tmux.yml
+
     - name: Install Postgres from source
       import_tasks: tasks/setup-postgres.yml
 
@@ -34,11 +40,17 @@
       tags:
         - install-pgbouncer
         - install-supabase-internal
-      when: debpkg_mode or nixpkg_mode
+      when: debpkg_mode or nixpkg_mode or stage2_nix
 
     - name: Install WAL-G
       import_tasks: tasks/setup-wal-g.yml
       when: debpkg_mode or nixpkg_mode or stage2_nix
+
+    - name: Install pgBackRest
+      import_tasks: 
+        file: tasks/setup-pgbackrest.yml
+      when:
+        - debpkg_mode or nixpkg_mode or stage2_nix
 
     - name: Install Gotrue
       import_tasks: tasks/setup-gotrue.yml
@@ -204,24 +216,32 @@
         apt autoremove -y --purge snapd
       when: stage2_nix
 
-    - name: Install osquery from nixpkgs binary cache
-      become: yes
-      shell: |
-        sudo -u ubuntu bash -c ". /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh && nix profile install github:nixos/nixpkgs/f98ec4f73c762223d62bee706726138cb6ea27cc#osquery"
-      when: stage2_nix
-
-    - name: Run osquery permission checks
+    - name: Run permission checks
       become: yes
       shell: |
         systemctl start postgresql.service
-        sudo -u ubuntu bash -c ". /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh && /usr/bin/python3 /tmp/ansible-playbook/ansible/files/permission_check.py {{ '--qemu' if qemu_mode is defined else '' }}"
+        /usr/bin/python3 /tmp/ansible-playbook/ansible/files/permission_check.py {{ '--qemu' if qemu_mode is defined else '' }}
         systemctl stop postgresql.service
       when: stage2_nix
 
-    - name: Remove osquery    
+    - name: Run fail2ban configuration checks
       become: yes
       shell: |
-        sudo -u ubuntu bash -c ". /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh && nix profile remove osquery"
+        systemctl start fail2ban.service
+        /usr/bin/python3 /tmp/ansible-playbook/ansible/files/fail2ban_check.py
+        systemctl stop fail2ban.service
+      when: stage2_nix
+
+    - name: Run supascan baseline validation
+      become: yes
+      shell: |
+        /bin/bash /tmp/ansible-playbook/ansible/files/supascan_ami.sh /tmp/ansible-playbook/audit-specs/baselines/ami-build
+      when: stage2_nix and qemu_mode is not defined and ansible_architecture != "x86_64"
+
+    - name: Remove supascan after validation
+      become: yes
+      shell: |
+        sudo -u ubuntu bash -c ". /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh && nix profile remove supascan"
       when: stage2_nix
 
     - name: nix collect garbage

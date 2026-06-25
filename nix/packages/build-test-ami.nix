@@ -1,23 +1,29 @@
-{ pkgs, runCommand }:
-runCommand "build-test-ami"
-  {
-    buildInputs = with pkgs; [
-      packer
-      awscli2
-      yq
-      jq
-      openssl
-      git
-      coreutils
-      aws-vault
-    ];
-  }
-  ''
-    mkdir -p $out/bin
-    cat > $out/bin/build-test-ami << 'EOL'
-    #!/usr/bin/env bash
-    set -euo pipefail
-
+{
+  writeShellApplication,
+  packer,
+  awscli2,
+  yq,
+  jq,
+  openssl,
+  gitMinimal,
+  coreutils,
+  aws-vault,
+  python3,
+}:
+writeShellApplication {
+  name = "build-test-ami";
+  runtimeInputs = [
+    packer
+    awscli2
+    yq
+    jq
+    openssl
+    gitMinimal
+    coreutils
+    aws-vault
+    python3
+  ];
+  text = ''
     show_help() {
       cat << EOF
     Usage: build-test-ami [--help] <postgres-version>
@@ -52,30 +58,6 @@ runCommand "build-test-ami"
       exit 0
     fi
 
-    export PATH="${
-      pkgs.lib.makeBinPath (
-        with pkgs;
-        [
-          packer
-          awscli2
-          yq
-          jq
-          openssl
-          git
-          coreutils
-          aws-vault
-        ]
-      )
-    }:$PATH"
-
-    # Check for required tools
-    for cmd in packer aws-vault yq jq openssl; do
-      if ! command -v $cmd &> /dev/null; then
-        echo "Error: $cmd is required but not found"
-        exit 1
-      fi
-    done
-
     # Check AWS Vault profile
     if [ -z "''${AWS_VAULT:-}" ]; then
       echo "Error: AWS_VAULT environment variable must be set with the profile name"
@@ -99,7 +81,7 @@ runCommand "build-test-ami"
     packer build \
       -var "git-head-version=$GIT_SHA" \
       -var "packer-execution-id=$RUN_ID" \
-      -var-file="development-arm.vars.pkr.hcl" \
+      -var-file="development-arm64.vars.pkr.hcl" \
       -var-file="common-nix.vars.pkr.hcl" \
       -var "ansible_arguments=" \
       -var "postgres-version=$RANDOM_STRING" \
@@ -115,12 +97,11 @@ runCommand "build-test-ami"
       -var "git-head-version=$GIT_SHA" \
       -var "packer-execution-id=$RUN_ID" \
       -var "postgres_major_version=$POSTGRES_VERSION" \
-      -var-file="development-arm.vars.pkr.hcl" \
+      -var-file="development-arm64.vars.pkr.hcl" \
       -var-file="common-nix.vars.pkr.hcl" \
       -var "postgres-version=$RANDOM_STRING" \
       -var "region=$REGION" \
       -var 'ami_regions=["'"$REGION"'"]' \
-      -var "force-deregister=true" \
       -var "git_sha=$GIT_SHA" \
       stage2-nix-psql.pkr.hcl
 
@@ -141,18 +122,18 @@ runCommand "build-test-ami"
     VENV_DIR=$(mktemp -d)
     trap 'rm -rf "$VENV_DIR"' EXIT HUP INT QUIT TERM
     python3 -m venv "$VENV_DIR"
+    # shellcheck source=/dev/null
     source "$VENV_DIR/bin/activate"
 
     # Install required Python packages
     echo "Installing required Python packages..."
-    pip install boto3 boto3-stubs[essential] docker ec2instanceconnectcli pytest paramiko requests
+    pip install boto3 'boto3-stubs[essential]' docker ec2instanceconnectcli pytest paramiko requests
 
     # Run the tests with aws-vault
     echo "Running tests for AMI: $RANDOM_STRING using AWS Vault profile: $AWS_VAULT_PROFILE"
-    aws-vault exec $AWS_VAULT_PROFILE -- pytest -vv -s testinfra/test_ami_nix.py
+    aws-vault exec "$AWS_VAULT_PROFILE" -- pytest -vv -s testinfra/test_ami_nix.py
 
     # Deactivate virtual environment (cleanup is handled by trap)
     deactivate
-    EOL
-    chmod +x $out/bin/build-test-ami
-  ''
+  '';
+}

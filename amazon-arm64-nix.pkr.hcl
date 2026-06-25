@@ -15,27 +15,12 @@ variable "ami_name" {
 
 variable "ami_regions" {
   type    = list(string)
-  default = ["ap-southeast-2"]
+  default = ["ap-southeast-1"]
 }
 
 variable "ansible_arguments" {
   type    = string
   default = "--skip-tags install-postgrest,install-pgbouncer,install-supabase-internal"
-}
-
-variable "aws_access_key" {
-  type    = string
-  default = ""
-}
-
-variable "aws_secret_key" {
-  type    = string
-  default = ""
-}
-
-variable "environment" {
-  type    = string
-  default = "prod"
 }
 
 variable "region" {
@@ -92,11 +77,20 @@ variable "force-deregister" {
   default = false
 }
 
+variable "input-hash" {
+  type    = string
+  default = ""
+  description = "Content hash of all input sources"
+}
+
 packer {
   required_plugins {
     amazon = {
       source  = "github.com/hashicorp/amazon"
-      version = "~> 1"
+      # don't use semver for the version since there's no lock files
+      # can go back when we can have renovate watching this
+      # see https://github.com/hashicorp/packer-plugin-amazon/issues/676
+      version = "1.8.0"
     }
   }
 }
@@ -104,16 +98,19 @@ packer {
 # source block
 source "amazon-ebssurrogate" "source" {
   profile = "${var.profile}"
-  #access_key    = "${var.aws_access_key}"
-  #ami_name = "${var.ami_name}-arm64-${formatdate("YYYY-MM-DD-hhmm", timestamp())}"
-  ami_name = "${var.ami_name}-${var.postgres-version}-stage-1"
+  ami_name = "${var.ami_name}-${var.postgres-version}-${var.input-hash}-stage-1"
   ami_virtualization_type = "hvm"
   ami_architecture = "arm64"
   ami_regions   = "${var.ami_regions}"
   instance_type = "c6g.4xlarge"
   region       = "${var.region}"
-  #secret_key   = "${var.aws_secret_key}"
   force_deregister = var.force-deregister
+
+  # Increase timeout for instance stop operations to handle large instances
+  aws_polling {
+    delay_seconds = 15
+    max_attempts  = 120  # 120 * 15s = 30 minutes max wait
+  }
 
   # Use latest official ubuntu noble ami owned by Canonical.
   source_ami_filter {
@@ -124,27 +121,31 @@ source "amazon-ebssurrogate" "source" {
     }
     owners = [ "099720109477" ]
     most_recent = true
-   }
+  }
+
   ena_support = true
   launch_block_device_mappings {
-    device_name = "/dev/xvdf"
+    device_name           = "/dev/xvdf"
     delete_on_termination = true
-    volume_size = 10
-    volume_type = "gp3"
+    volume_size           = 10
+    volume_type           = "gp3"
    }
 
+  # NOTE: /dev/xvdh is mounted as /data (PostgreSQL data/WAL). The 1 GiB size
+  # is a minimal default for this AMI; consumers should override this volume
+  # size at launch.
   launch_block_device_mappings {
-    device_name = "/dev/xvdh"
+    device_name           = "/dev/xvdh"
     delete_on_termination = true
-    volume_size = 8
-    volume_type = "gp3"
+    volume_size           = 1
+    volume_type           = "gp3"
    }
 
   launch_block_device_mappings {
     device_name           = "/dev/${var.build-vol}"
     delete_on_termination = true
     volume_size           = 16
-    volume_type           = "gp2"
+    volume_type           = "gp3"
     omit_from_artifact    = true
   }
 
@@ -154,8 +155,9 @@ source "amazon-ebssurrogate" "source" {
     packerExecutionId = "${var.packer-execution-id}"
   }
   run_volume_tags = {
-    creator = "packer"
-    appType = "postgres"
+    creator           = "packer"
+    appType           = "postgres"
+    packerExecutionId = "${var.packer-execution-id}"
   }
   snapshot_tags = {
     creator = "packer"
@@ -166,6 +168,7 @@ source "amazon-ebssurrogate" "source" {
     appType = "postgres"
     postgresVersion = "${var.postgres-version}-stage1"
     sourceSha = "${var.git-head-version}"
+    inputHash = "${var.input-hash}"
   }
 
   communicator = "ssh"
@@ -174,11 +177,11 @@ source "amazon-ebssurrogate" "source" {
   ssh_timeout = "5m"
 
   ami_root_device {
-    source_device_name = "/dev/xvdf"
-    device_name = "/dev/xvda"
+    source_device_name    = "/dev/xvdf"
+    device_name           = "/dev/xvda"
     delete_on_termination = true
-    volume_size = 10
-    volume_type = "gp2"
+    volume_size           = 10
+    volume_type           = "gp3"
   }
 
   associate_public_ip_address = true

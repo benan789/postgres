@@ -20,9 +20,10 @@ let
       pkgs.lib.nameValuePair "${namePrefix}${versionSuffix}" (
         pkgs.callPackage ./generic.nix {
           inherit isOrioleDB;
-          inherit (config) version hash;
+          inherit (config) version hash revision;
           jitSupport = jitSupport;
           self = pkgs;
+          portable = false; # Default to non-portable, can be overridden
         }
       )
     ) supportedVersions;

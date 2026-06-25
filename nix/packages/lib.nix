@@ -4,14 +4,14 @@
   psql_orioledb-17,
   defaults,
   supabase-groonga,
-  system,
-  pgroonga,
+  stdenv,
 }:
 {
   makePostgresDevSetup =
     {
       pkgs,
       name,
+      pgroonga,
       extraSubstitutions ? { },
     }:
     let
@@ -36,6 +36,10 @@
           name = "postgresql.conf";
           path = ../../ansible/files/postgresql_config/postgresql.conf.j2;
         };
+        configConfDir = builtins.path {
+          name = "conf.d";
+          path = ../../ansible/files/postgresql_config/conf.d;
+        };
         supautilsConfigFile = builtins.path {
           name = "supautils.conf";
           path = ../../ansible/files/postgresql_config/supautils.conf.j2;
@@ -46,7 +50,7 @@
         };
         readReplicaConfigFile = builtins.path {
           name = "readreplica.conf";
-          path = ../../ansible/files/postgresql_config/custom_read_replica.conf.j2;
+          path = ../../ansible/files/postgresql_config/custom_read_replica.conf;
         };
         pgHbaConfigFile = builtins.path {
           name = "pg_hba.conf";
@@ -72,6 +76,11 @@
         else
           "${pkgs.glibcLocales}/lib/locale/locale-archive";
 
+      postgresqlConfigBaseDir = builtins.path {
+        name = "postgresql_config";
+        path = ../../ansible/files/postgresql_config;
+      };
+
       substitutions = {
         SHELL_PATH = "${pkgs.bash}/bin/bash";
         PGSQL_DEFAULT_PORT = "${defaults.port}";
@@ -79,6 +88,7 @@
         PSQL15_BINDIR = "${psql_15}";
         PSQL17_BINDIR = "${psql_17}";
         PSQL_CONF_FILE = "${paths.pgconfigFile}";
+        POSTGRESQL_CONFIG_DIR = "${postgresqlConfigBaseDir}";
         PSQLORIOLEDB17_BINDIR = "${psql_orioledb-17}";
         PGSODIUM_GETKEY = "${paths.getkeyScript}";
         READREPL_CONF_FILE = "${paths.readReplicaConfigFile}";
@@ -94,8 +104,9 @@
         POSTGRESQL_SCHEMA_SQL = "${paths.postgresqlSchemaSql}";
         PGBOUNCER_AUTH_SCHEMA_SQL = "${paths.pgbouncerAuthSchemaSql}";
         STAT_EXTENSION_SQL = "${paths.statExtensionSql}";
-        CURRENT_SYSTEM = "${system}";
-      } // extraSubstitutions; # Merge in any extra substitutions
+        CURRENT_SYSTEM = "${stdenv.hostPlatform.system}";
+      }
+      // extraSubstitutions; # Merge in any extra substitutions
     in
     pkgs.runCommand name
       {
@@ -125,13 +136,11 @@
         chmod 644 $out/etc/postgresql/pg_hba.conf
 
         substitute ${../tools/run-server.sh.in} $out/bin/start-postgres-server \
-          ${
-            builtins.concatStringsSep " " (
-              builtins.attrValues (
-                builtins.mapAttrs (name: value: "--subst-var-by '${name}' '${value}'") substitutions
-              )
+          ${builtins.concatStringsSep " " (
+            builtins.attrValues (
+              builtins.mapAttrs (name: value: "--subst-var-by '${name}' '${value}'") substitutions
             )
-          }
+          )}
         chmod +x $out/bin/start-postgres-server
       '';
 }

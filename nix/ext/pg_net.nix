@@ -3,13 +3,17 @@
   lib,
   stdenv,
   fetchFromGitHub,
-  curl,
   postgresql,
   libuv,
   makeWrapper,
   switch-ext-version,
+  curl_8_6,
+  latestOnly ? false,
 }:
 
+let
+  curl = curl_8_6;
+in
 let
   pname = "pg_net";
   build =
@@ -20,7 +24,8 @@ let
       buildInputs = [
         curl
         postgresql
-      ] ++ lib.optional (version == "0.6") libuv;
+      ]
+      ++ lib.optional (version == "0.6") libuv;
 
       src = fetchFromGitHub {
         owner = "supabase";
@@ -45,7 +50,23 @@ let
           rm sql/pg_net--0.5.1--0.6.sql
         '';
 
-      env.NIX_CFLAGS_COMPILE = lib.optionalString (lib.versionOlder version "0.19.1") "-Wno-error";
+      env.NIX_CFLAGS_COMPILE =
+        if (lib.versionOlder version "0.19.1") then
+          "-Wno-error"
+        else if
+          (
+            builtins.elem version [
+              "0.19.5"
+              "0.20.0"
+            ]
+            && stdenv.isDarwin
+          )
+        then
+          # Fix for dangling pointer warning on darwin with newer clang
+          # 0.19.5: src/core.c:177, 0.20.0: src/core.c:317
+          "-Wno-error=dangling-assignment"
+        else
+          "";
 
       installPhase = ''
         mkdir -p $out/{lib,share/postgresql/extension}
@@ -87,15 +108,23 @@ let
   ) platformFilteredVersions;
   versions = lib.naturalSort (lib.attrNames supportedVersions);
   latestVersion = lib.last versions;
-  numberOfVersions = builtins.length versions;
-  packages = builtins.attrValues (
-    lib.mapAttrs (name: value: build name value.hash) supportedVersions
-  );
+  versionsToUse =
+    if latestOnly then
+      { "${latestVersion}" = supportedVersions.${latestVersion}; }
+    else
+      supportedVersions;
+  packages = builtins.attrValues (lib.mapAttrs (name: value: build name value.hash) versionsToUse);
+  versionsBuilt = if latestOnly then [ latestVersion ] else versions;
+  numberOfVersionsBuilt = builtins.length versionsBuilt;
 in
 pkgs.buildEnv {
   name = pname;
   paths = packages;
   nativeBuildInputs = [ makeWrapper ];
+  pathsToLink = [
+    "/lib"
+    "/share/postgresql/extension"
+  ];
   postBuild = ''
     {
       echo "default_version = '${latestVersion}'"
@@ -107,7 +136,7 @@ pkgs.buildEnv {
     # checks
     (set -x
        test "$(ls -A $out/lib/${pname}*${postgresql.dlSuffix} | wc -l)" = "${
-         toString (numberOfVersions + 1)
+         toString (numberOfVersionsBuilt + 1)
        }"
     )
 
@@ -116,13 +145,17 @@ pkgs.buildEnv {
   '';
 
   passthru = {
-    inherit versions numberOfVersions;
-    pname = "${pname}-all";
+    versions = versionsBuilt;
+    numberOfVersions = numberOfVersionsBuilt;
+    inherit pname latestOnly;
     hasBackgroundWorker = true;
     defaultSettings = {
       shared_preload_libraries = [ "pg_net" ];
     };
     version =
-      "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
+      if latestOnly then
+        latestVersion
+      else
+        "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
   };
 }

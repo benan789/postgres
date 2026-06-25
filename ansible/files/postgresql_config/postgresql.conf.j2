@@ -242,12 +242,11 @@ checkpoint_flush_after = 256kB		# measured in pages, 0 disables
 
 # - Archiving -
 
-#archive_mode = off		# enables archiving; off, on, or always
-				# (change requires restart)
-#archive_command = ''		# command to use to archive a logfile segment
-				# placeholders: %p = path of file to archive
-				#               %f = file name only
-				# e.g. 'test ! -f /mnt/server/archivedir/%f && cp %p /mnt/server/archivedir/%f'
+#archive_mode = off  # enables archiving; off, on, or always (change requires restart)
+#archive_command = ''   # command to use to archive a logfile segment
+                                # placeholders: %p = path of file to archive
+                                # %f = file name only
+                                # e.g. 'test ! -f /mnt/server/archivedir/%f && cp %p /mnt/server/archivedir/%f'
 #archive_timeout = 0		# force a logfile segment switch after this
 				# number of seconds; 0 disables
 
@@ -300,7 +299,7 @@ max_wal_senders = 10		# max number of walsender processes
 max_replication_slots = 5	# max number of replication slots
 				# (change requires restart)
 #wal_keep_size = 0		# in megabytes; 0 disables
-max_slot_wal_keep_size = 4096   # in megabytes; -1 disables
+max_slot_wal_keep_size = 512    # in megabytes; -1 disables
 #wal_sender_timeout = 60s	# in milliseconds; 0 disables
 #track_commit_timestamp = off	# collect timestamp of transaction commit
 				# (change requires restart)
@@ -750,8 +749,6 @@ jit_provider = 'llvmjit'		# JIT library to use
 # default postgresql.conf.  Note that these are directives, not variable
 # assignments, so they can usefully be given more than once.
 
-#include_dir = '...'			# include files ending in '.conf' from
-					# a directory, e.g., 'conf.d'
 #include_if_exists = '...'		# include file only if it exists
 #include = '...'			# include file
 
@@ -769,10 +766,9 @@ include = '/etc/postgresql-custom/read-replica.conf'
 # supautils specific configurations
 #include = '/etc/postgresql-custom/supautils.conf'
 
+include_dir = '/etc/postgresql-custom/conf.d'  # include files ending in '.conf' from a directory, e.g., 'conf.d'
 #------------------------------------------------------------------------------
 # CUSTOMIZED OPTIONS
 #------------------------------------------------------------------------------
 
 # Add settings for extensions here
-auto_explain.log_min_duration = 10s
-cron.database_name = 'postgres'

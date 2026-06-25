@@ -7,6 +7,9 @@
   postgresql,
   rust-bin,
   rsync,
+  makeWrapper,
+  switch-ext-version,
+  latestOnly ? false,
 }:
 
 let
@@ -62,14 +65,6 @@ let
                 -e "s|^module_pathname = .*|module_pathname = '\$libdir/${pname}'|" \
               ${pname}.control > $out/share/postgresql/extension/${pname}--${version}.control
             rm $out/share/postgresql/extension/${pname}.control
-
-            if [[ "${version}" == "${latestVersion}" ]]; then
-              {
-                echo "default_version = '${latestVersion}'"
-                cat $out/share/postgresql/extension/${pname}--${latestVersion}.control
-              } > $out/share/postgresql/extension/${pname}.control
-              ln -sfn ${pname}-${latestVersion}${postgresql.dlSuffix} $out/lib/${pname}${postgresql.dlSuffix}
-            fi
           }
 
           create_control_files
@@ -124,14 +119,21 @@ let
   ) allVersions;
   versions = lib.naturalSort (lib.attrNames supportedVersions);
   latestVersion = lib.last versions;
-  numberOfVersions = builtins.length versions;
+  versionsToUse =
+    if latestOnly then
+      { "${latestVersion}" = supportedVersions.${latestVersion}; }
+    else
+      supportedVersions;
+  versionsBuilt = if latestOnly then [ latestVersion ] else versions;
+  numberOfVersionsBuilt = builtins.length versionsBuilt;
   packages = builtins.attrValues (
-    lib.mapAttrs (name: value: build name value.hash value.rust value.pgrx) supportedVersions
+    lib.mapAttrs (name: value: build name value.hash value.rust value.pgrx) versionsToUse
   );
 in
-buildEnv {
+(buildEnv {
   name = pname;
   paths = packages;
+  nativeBuildInputs = [ makeWrapper ];
   pathsToLink = [
     "/lib"
     "/share/postgresql/extension"
@@ -164,17 +166,34 @@ buildEnv {
 
     create_sql_files
 
+    # Set latest version
+    {
+      echo "default_version = '${latestVersion}'"
+      cat $out/share/postgresql/extension/${pname}--${latestVersion}.control
+    } >$out/share/postgresql/extension/${pname}.control
+    ln -sfn ${pname}-${latestVersion}${postgresql.dlSuffix} $out/lib/${pname}${postgresql.dlSuffix}
+
     # checks
     (set -x
        test "$(ls -A $out/lib/${pname}*${postgresql.dlSuffix} | wc -l)" = "${
-         toString (numberOfVersions + 1)
+         toString (numberOfVersionsBuilt + 1)
        }"
     )
+
+    makeWrapper ${lib.getExe switch-ext-version} $out/bin/switch_${pname}_version \
+      --prefix EXT_WRAPPER : "$out" --prefix EXT_NAME : "${pname}"
   '';
   passthru = {
-    inherit versions numberOfVersions;
-    pname = "${pname}-all";
+    versions = versionsBuilt;
+    numberOfVersions = numberOfVersionsBuilt;
+    inherit pname latestOnly;
     version =
-      "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
+      if latestOnly then
+        latestVersion
+      else
+        "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
   };
-}
+}).overrideAttrs
+  (_: {
+    requiredSystemFeatures = [ "big-parallel" ];
+  })

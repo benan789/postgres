@@ -1,3 +1,5 @@
+# Receipt Files
+
 Every time you run `nix build` on this repository to build PostgreSQL, the
 installation directory comes with a _receipt_ file that tells you what's inside
 of it. Primarily, this tells you:
@@ -15,11 +17,11 @@ upgrade mechanisms.
 For example:
 
 ```
-nix build .#psql_15/bin
+nix build .#psql_15.bin
 ```
 
 ```
-austin@GANON:~/work/nix-postgres$ nix build .#psql_15/bin
+austin@GANON:~/work/nix-postgres$ nix build .#psql_15.bin
 austin@GANON:~/work/nix-postgres$ ls result
 bin  include  lib  receipt.json  share
 ```

@@ -16,10 +16,15 @@
   nixosTests,
   callPackage,
   buildEnv,
+  makeWrapper,
+  switch-ext-version,
+  writeShellApplication,
+  coreutils,
+  sfcgal,
+  latestOnly ? false,
 }:
 
 let
-  sfcgal = callPackage ./sfcgal/sfcgal.nix { };
   gdal = callPackage ./gdal.nix { inherit postgresql; };
   pname = "postgis";
 
@@ -34,10 +39,48 @@ let
   # Derived version information
   versions = lib.naturalSort (lib.attrNames supportedVersions);
   latestVersion = lib.last versions;
-  numberOfVersions = builtins.length versions;
-  packages = builtins.attrValues (
-    lib.mapAttrs (name: value: build name value.hash) supportedVersions
-  );
+  versionsToUse =
+    if latestOnly then
+      { "${latestVersion}" = supportedVersions.${latestVersion}; }
+    else
+      supportedVersions;
+  versionsBuilt = if latestOnly then [ latestVersion ] else versions;
+  numberOfVersionsBuilt = builtins.length versionsBuilt;
+  packages = builtins.attrValues (lib.mapAttrs (name: value: build name value.hash) versionsToUse);
+
+  # Custom switch script for postgis — handles all sub-libraries with -3 naming.
+  # The generic switch-ext-version handles the main postgis library (postgis.so -> postgis-VERSION.so)
+  # and control file. This EXTRA_STEPS script handles the -3 symlink plus the 4 additional sub-libraries.
+  postgis-switch-extra-steps = writeShellApplication {
+    name = "postgis-switch-extra-steps";
+    runtimeInputs = [ coreutils ];
+    text = ''
+      EXT_WRAPPER_LIB="$EXT_WRAPPER/lib"
+      CONTROL_DIR="$EXT_WRAPPER/share/postgresql/extension"
+
+      # Repoint the postgis-3 symlink (module_pathname uses $libdir/postgis-3)
+      if [ -f "$EXT_WRAPPER_LIB/postgis-''${VERSION}${postgresql.dlSuffix}" ]; then
+        ln -sfnv "postgis-''${VERSION}${postgresql.dlSuffix}" "$EXT_WRAPPER_LIB/postgis-3${postgresql.dlSuffix}"
+      fi
+
+      # Switch additional sub-libraries
+      for ext in postgis_raster postgis_topology postgis_sfcgal address_standardizer; do
+        VERSIONED_LIB="$EXT_WRAPPER_LIB/$ext-''${VERSION}${postgresql.dlSuffix}"
+        DEFAULT_LIB="$EXT_WRAPPER_LIB/$ext-3${postgresql.dlSuffix}"
+        if [ -f "$VERSIONED_LIB" ]; then
+          ln -sfnv "$VERSIONED_LIB" "$DEFAULT_LIB"
+
+          # Update control file for this sub-extension
+          if [ -f "$CONTROL_DIR/$ext--''${VERSION}.control" ]; then
+            echo "default_version = '$VERSION'" > "$CONTROL_DIR/$ext.control"
+            cat "$CONTROL_DIR/$ext--''${VERSION}.control" >> "$CONTROL_DIR/$ext.control"
+          fi
+        else
+          echo "Warning: $ext versioned library not found at $VERSIONED_LIB, skipping"
+        fi
+      done
+    '';
+  };
 
   # List of C extensions to be included in the build
   cExtensions = [
@@ -79,7 +122,8 @@ let
         protobufc
         pcre2.dev
         sfcgal
-      ] ++ lib.optional stdenv.isDarwin libiconv;
+      ]
+      ++ lib.optional stdenv.isDarwin libiconv;
       nativeBuildInputs = [
         perl
         pkg-config
@@ -179,19 +223,19 @@ let
       };
     };
 in
-buildEnv {
+(buildEnv {
   name = pname;
   paths = packages;
-
+  nativeBuildInputs = [ makeWrapper ];
   pathsToLink = [
     "/lib"
     "/share/postgresql/extension"
   ];
   postBuild = ''
     # Verify all expected library files are present
-    # We expect: (numberOfVersions * cExtensions) versioned libraries + cExtensions symlinks
+    # We expect: (numberOfVersionsBuilt * cExtensions) versioned libraries + cExtensions symlinks
     expectedFiles=${
-      toString ((numberOfVersions * builtins.length cExtensions) + builtins.length cExtensions)
+      toString ((numberOfVersionsBuilt * builtins.length cExtensions) + builtins.length cExtensions)
     }
     actualFiles=$(ls -A $out/lib/*${postgresql.dlSuffix} | wc -l)
 
@@ -201,12 +245,27 @@ buildEnv {
       ls -la $out/lib/*${postgresql.dlSuffix} || true
       exit 1
     fi
+
+    # PostGIS has multiple sub-libraries (postgis-3, postgis_raster-3, etc.).
+    # The generic switch-ext-version handles the main postgis.so symlink and control file.
+    # EXTRA_STEPS repoints the -3 symlinks and switches the 4 additional sub-libraries.
+    makeWrapper ${lib.getExe switch-ext-version} $out/bin/switch_${pname}_version \
+      --prefix EXT_WRAPPER : "$out" \
+      --prefix EXT_NAME : "${pname}" \
+      --prefix EXTRA_STEPS : "${lib.getExe postgis-switch-extra-steps}"
   '';
 
   passthru = {
-    inherit versions numberOfVersions;
-    pname = "${pname}-all";
+    versions = versionsBuilt;
+    numberOfVersions = numberOfVersionsBuilt;
+    inherit pname latestOnly;
     version =
-      "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
+      if latestOnly then
+        latestVersion
+      else
+        "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
   };
-}
+}).overrideAttrs
+  (_: {
+    requiredSystemFeatures = [ "big-parallel" ];
+  })

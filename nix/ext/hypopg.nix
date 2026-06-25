@@ -4,6 +4,9 @@
   buildEnv,
   fetchFromGitHub,
   postgresql,
+  makeWrapper,
+  switch-ext-version,
+  latestOnly ? false,
 }:
 
 let
@@ -14,7 +17,13 @@ let
   ) allVersions;
   versions = lib.naturalSort (lib.attrNames supportedVersions);
   latestVersion = lib.last versions;
-  numberOfVersions = builtins.length versions;
+  versionsToUse =
+    if latestOnly then
+      { "${latestVersion}" = supportedVersions.${latestVersion}; }
+    else
+      supportedVersions;
+  versionsBuilt = if latestOnly then [ latestVersion ] else versions;
+  numberOfVersionsBuilt = builtins.length versionsBuilt;
   build =
     version: hash:
     stdenv.mkDerivation rec {
@@ -66,13 +75,12 @@ let
         inherit (postgresql.meta) platforms;
       };
     };
-  packages = builtins.attrValues (
-    lib.mapAttrs (name: value: build name value.hash) supportedVersions
-  );
+  packages = builtins.attrValues (lib.mapAttrs (name: value: build name value.hash) versionsToUse);
 in
 buildEnv {
   name = pname;
   paths = packages;
+  nativeBuildInputs = [ makeWrapper ];
   pathsToLink = [
     "/lib"
     "/share/postgresql/extension"
@@ -81,15 +89,22 @@ buildEnv {
     # checks
     (set -x
        test "$(ls -A $out/lib/${pname}*${postgresql.dlSuffix} | wc -l)" = "${
-         toString (numberOfVersions + 1)
+         toString (numberOfVersionsBuilt + 1)
        }"
     )
+
+    makeWrapper ${lib.getExe switch-ext-version} $out/bin/switch_${pname}_version \
+      --prefix EXT_WRAPPER : "$out" --prefix EXT_NAME : "${pname}"
   '';
 
   passthru = {
-    inherit versions numberOfVersions;
-    pname = "${pname}-all";
+    versions = versionsBuilt;
+    numberOfVersions = numberOfVersionsBuilt;
+    inherit pname latestOnly;
     version =
-      "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
+      if latestOnly then
+        latestVersion
+      else
+        "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
   };
 }

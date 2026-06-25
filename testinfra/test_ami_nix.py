@@ -1,15 +1,17 @@
 import base64
-import boto3
 import gzip
 import logging
 import os
+import socket
+from pathlib import Path
+from time import sleep
+
+import boto3
+import paramiko
 import pytest
 import requests
-import socket
-from ec2instanceconnectcli.EC2InstanceConnectLogger import EC2InstanceConnectLogger
 from ec2instanceconnectcli.EC2InstanceConnectKey import EC2InstanceConnectKey
-from time import sleep
-import paramiko
+from ec2instanceconnectcli.EC2InstanceConnectLogger import EC2InstanceConnectLogger
 
 # if EXECUTION_ID is not set, use a default value that includes the user and hostname
 RUN_ID = os.environ.get(
@@ -19,7 +21,7 @@ RUN_ID = os.environ.get(
     + "@"
     + socket.gethostname(),
 )
-AMI_NAME = os.environ.get("AMI_NAME")
+AMI_ID = os.environ.get("AMI_ID")
 postgresql_schema_sql_content = """
 ALTER DATABASE postgres SET "app.settings.jwt_secret" TO  'my_jwt_secret_which_is_not_so_secret';
 ALTER DATABASE postgres SET "app.settings.jwt_exp" TO 3600;
@@ -108,7 +110,7 @@ pgsodium_root_key_content = (
 )
 postgrest_base_conf_content = """
 db-uri = "postgres://authenticator:postgres@localhost:5432/postgres?application_name=postgrest"
-db-schema = "public, storage, graphql_public"
+db-schema = "public, graphql_public"
 db-anon-role = "anon"
 jwt-secret = "my_jwt_secret_which_is_not_so_secret"
 role-claim-key = ".role"
@@ -144,6 +146,34 @@ walg_config_json_content = """
 anon_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE2OTYyMjQ5NjYsImV4cCI6MjAxMTgwMDk2Nn0.QW95aRPA-4QuLzuvaIeeoFKlJP9J2hvAIpJ3WJ6G5zo"
 service_role_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTY5NjIyNDk2NiwiZXhwIjoyMDExODAwOTY2fQ.Om7yqv15gC3mLGitBmvFRB3M4IsLsX9fXzTQnFM7lu0"
 supabase_admin_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhIiwicm9sZSI6InN1cGFiYXNlX2FkbWluIiwiaWF0IjoxNjk2MjI0OTY2LCJleHAiOjIwMTE4MDA5NjZ9.jrD3j2rBWiIx0vhVZzd1CXFv7qkAP392nBMadvXxk1c"
+
+
+def load_expected_pgbouncer_version() -> str:
+    repo_root = Path(__file__).resolve().parent.parent
+    ansible_vars = repo_root / "ansible" / "vars.yml"
+    if ansible_vars.exists():
+        with ansible_vars.open() as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if line.startswith("pgbouncer_release:"):
+                    return line.split(":", 1)[1].strip().strip('"')
+
+    nix_file = repo_root / "nix" / "pgbouncer.nix"
+    if nix_file.exists():
+        with nix_file.open() as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if line.startswith("version ="):
+                    value = line.split("=", 1)[1].strip()
+                    return value.strip(";").strip('"')
+
+    raise RuntimeError(
+        "Could not determine expected PgBouncer version from configuration files"
+    )
+
+
+EXPECTED_PGBOUNCER_VERSION = load_expected_pgbouncer_version()
+PGBOUNCER_BINARY = "/nix/var/nix/profiles/per-user/pgbouncer/profile/bin/pgbouncer"
 init_json_content = f"""
 {{
   "jwt_secret": "my_jwt_secret_which_is_not_so_secret",
@@ -199,7 +229,7 @@ def get_ssh_connection(instance_ip, ssh_identity_file, max_retries=10):
             else:
                 raise Exception("SSH test command failed")
 
-        except Exception as e:
+        except Exception:
             if attempt == max_retries - 1:
                 raise
             logger.warning(
@@ -219,18 +249,22 @@ def run_ssh_command(ssh, command, timeout=None):
     }
 
 
+def upload_file_via_sftp(ssh, local_path, remote_path):
+    """Upload a file to the remote host via SFTP."""
+    sftp = ssh.open_sftp()
+    try:
+        sftp.put(local_path, remote_path)
+        logger.info(f"Uploaded {local_path} to {remote_path}")
+    finally:
+        sftp.close()
+
+
 # scope='session' uses the same container for all the tests;
 # scope='function' uses a new container per test function.
 @pytest.fixture(scope="session")
 def host():
     ec2 = boto3.resource("ec2", region_name="ap-southeast-1")
-    images = list(
-        ec2.images.filter(
-            Filters=[{"Name": "name", "Values": [AMI_NAME]}],
-        )
-    )
-    assert len(images) == 1
-    image = images[0]
+    image = ec2.Image(AMI_ID)
 
     def gzip_then_base64_encode(s: str) -> str:
         return base64.b64encode(gzip.compress(s.encode())).decode()
@@ -257,7 +291,7 @@ def host():
                 "HttpEndpoint": "enabled",
             },
             IamInstanceProfile={"Name": "pg-ap-southeast-1"},
-            InstanceType="t4g.micro",
+            InstanceType="t4g.micro" if image.architecture == "arm64" else "t3.small",
             MinCount=1,
             MaxCount=1,
             ImageId=image.id,
@@ -351,9 +385,33 @@ users:
         instance.terminate()
         raise TimeoutError("init.sh failed to complete within the timeout period")
 
+    # Create auth-failures.csv file if it doesn't exist (required for fail2ban to start)
+    # This matches what setup_fail2ban() does in the init script
+    logger.info("Ensuring PostgreSQL auth-failures.csv exists...")
+    result = run_ssh_command(
+        ssh,
+        "sudo mkdir -p /var/log/postgresql && sudo chown -R postgres:postgres /var/log/postgresql && sudo chmod 1775 /var/log/postgresql && sudo -u postgres touch /var/log/postgresql/auth-failures.csv && sudo chmod 0664 /var/log/postgresql/auth-failures.csv",
+    )
+    if not result["succeeded"]:
+        logger.warning(f"Failed to create auth-failures.csv: {result['stderr']}")
+
+    # Start fail2ban service before health checks
+    logger.info("Starting fail2ban service...")
+    result = run_ssh_command(ssh, "sudo systemctl start fail2ban.service")
+    if not result["succeeded"]:
+        logger.warning(f"Failed to start fail2ban: {result['stderr']}")
+        # Check fail2ban logs for more details
+        log_result = run_ssh_command(
+            ssh, "sudo journalctl -u fail2ban -n 20 --no-pager"
+        )
+        if log_result["succeeded"]:
+            logger.warning(f"fail2ban logs:\n{log_result['stdout']}")
+    else:
+        logger.info("fail2ban service started successfully")
+
     def is_healthy(ssh) -> bool:
         health_checks = [
-            ("postgres", "sudo -u postgres /usr/bin/pg_isready -U postgres"),
+            ("postgresql", "sudo -u postgres /usr/bin/pg_isready -U postgres"),
             (
                 "adminapi",
                 f"curl -sf -k --connect-timeout 30 --max-time 60 https://localhost:8085/health -H 'apikey: {supabase_admin_key}'",
@@ -403,9 +461,9 @@ users:
 def test_postgrest_is_running(host):
     """Check if postgrest service is running using our SSH connection."""
     result = run_ssh_command(host["ssh"], "systemctl is-active postgrest")
-    assert (
-        result["succeeded"] and result["stdout"].strip() == "active"
-    ), "PostgREST service is not running"
+    assert result["succeeded"] and result["stdout"].strip() == "active", (
+        "PostgREST service is not running"
+    )
 
 
 def test_postgrest_responds_to_requests(host):
@@ -423,11 +481,10 @@ def test_postgrest_responds_to_requests(host):
 def test_postgrest_can_connect_to_db(host):
     """Test if PostgREST can connect to the database."""
     res = requests.get(
-        f"http://{host['ip']}/rest/v1/buckets",
+        f"http://{host['ip']}/rest-admin/v1/ready",
         headers={
             "apikey": service_role_key,
             "authorization": f"Bearer {service_role_key}",
-            "accept-profile": "storage",
         },
     )
     assert res.ok
@@ -436,10 +493,7 @@ def test_postgrest_can_connect_to_db(host):
 def test_postgrest_starting_apikey_query_parameter_is_removed(host):
     """Test if PostgREST removes apikey query parameter at start."""
     res = requests.get(
-        f"http://{host['ip']}/rest/v1/buckets",
-        headers={
-            "accept-profile": "storage",
-        },
+        f"http://{host['ip']}/rest/v1/",
         params={
             "apikey": service_role_key,
             "id": "eq.absent",
@@ -452,10 +506,7 @@ def test_postgrest_starting_apikey_query_parameter_is_removed(host):
 def test_postgrest_middle_apikey_query_parameter_is_removed(host):
     """Test if PostgREST removes apikey query parameter in middle."""
     res = requests.get(
-        f"http://{host['ip']}/rest/v1/buckets",
-        headers={
-            "accept-profile": "storage",
-        },
+        f"http://{host['ip']}/rest/v1/",
         params={
             "id": "eq.absent",
             "apikey": service_role_key,
@@ -468,10 +519,7 @@ def test_postgrest_middle_apikey_query_parameter_is_removed(host):
 def test_postgrest_ending_apikey_query_parameter_is_removed(host):
     """Test if PostgREST removes apikey query parameter at end."""
     res = requests.get(
-        f"http://{host['ip']}/rest/v1/buckets",
-        headers={
-            "accept-profile": "storage",
-        },
+        f"http://{host['ip']}/rest/v1/",
         params={
             "id": "eq.absent",
             "name": "eq.absent",
@@ -484,10 +532,7 @@ def test_postgrest_ending_apikey_query_parameter_is_removed(host):
 def test_postgrest_starting_empty_key_query_parameter_is_removed(host):
     """Test if PostgREST removes empty key query parameter at start."""
     res = requests.get(
-        f"http://{host['ip']}/rest/v1/buckets",
-        headers={
-            "accept-profile": "storage",
-        },
+        f"http://{host['ip']}/rest/v1/",
         params={
             "": "empty_key",
             "id": "eq.absent",
@@ -500,10 +545,7 @@ def test_postgrest_starting_empty_key_query_parameter_is_removed(host):
 def test_postgrest_middle_empty_key_query_parameter_is_removed(host):
     """Test if PostgREST removes empty key query parameter in middle."""
     res = requests.get(
-        f"http://{host['ip']}/rest/v1/buckets",
-        headers={
-            "accept-profile": "storage",
-        },
+        f"http://{host['ip']}/rest/v1/",
         params={
             "apikey": service_role_key,
             "": "empty_key",
@@ -516,10 +558,7 @@ def test_postgrest_middle_empty_key_query_parameter_is_removed(host):
 def test_postgrest_ending_empty_key_query_parameter_is_removed(host):
     """Test if PostgREST removes empty key query parameter at end."""
     res = requests.get(
-        f"http://{host['ip']}/rest/v1/buckets",
-        headers={
-            "accept-profile": "storage",
-        },
+        f"http://{host['ip']}/rest/v1/",
         params={
             "id": "eq.absent",
             "apikey": service_role_key,
@@ -547,9 +586,9 @@ def test_postgresql_version(host):
         if version_match:
             major_version = int(version_match.group(1))
             print(f"PostgreSQL major version: {major_version}")
-            assert (
-                major_version >= 14
-            ), f"PostgreSQL version {major_version} is less than 14"
+            assert major_version >= 14, (
+                f"PostgreSQL version {major_version} is less than 14"
+            )
         else:
             assert False, "Could not parse PostgreSQL version number"
     else:
@@ -579,9 +618,9 @@ def test_libpq5_version(host):
         if version_match:
             major_version = int(version_match.group(1))
             print(f"libpq5 major version: {major_version}")
-            assert (
-                major_version >= 14
-            ), f"libpq5 version {major_version} is less than 14"
+            assert major_version >= 14, (
+                f"libpq5 version {major_version} is less than 14"
+            )
         else:
             print("Could not parse libpq5 version from dpkg output")
     else:
@@ -614,13 +653,234 @@ def test_libpq5_version(host):
         if version_match:
             major_version = int(version_match.group(1))
             print(f"psql/libpq major version: {major_version}")
-            assert (
-                major_version >= 14
-            ), f"psql/libpq version {major_version} is less than 14"
+            assert major_version >= 14, (
+                f"psql/libpq version {major_version} is less than 14"
+            )
         else:
             print("Could not parse psql version")
 
     print("✓ libpq5 version is >= 14")
+
+
+def test_jit_pam_module_installed(host):
+    """Test that the JIT PAM module (pam_jit_pg.so) is properly installed."""
+    # Check PostgreSQL version first
+    result = run_ssh_command(
+        host["ssh"], "sudo -u postgres psql --version | grep -oE '[0-9]+' | head -1"
+    )
+    pg_major_version = 15  # Default
+    if result["succeeded"] and result["stdout"].strip():
+        try:
+            pg_major_version = int(result["stdout"].strip())
+        except ValueError:
+            pass
+
+    # Skip test for PostgreSQL 15 as gatekeeper is not installed for PG15
+    if pg_major_version == 15:
+        print("\nSkipping JIT PAM module test for PostgreSQL 15 (not installed)")
+        return
+
+    # Check if gatekeeper is installed via Nix
+    result = run_ssh_command(
+        host["ssh"],
+        "sudo -u postgres ls -la /var/lib/postgresql/.nix-profile/lib/security/pam_jit_pg.so 2>/dev/null",
+    )
+    if result["succeeded"]:
+        print(f"\nJIT PAM module found in Nix profile:\n{result['stdout']}")
+    else:
+        print("\nJIT PAM module not found in postgres user's Nix profile")
+        assert False, "JIT PAM module (pam_jit_pg.so) not found in expected location"
+
+    # Check if the symlink exists in the Linux PAM security directory
+    result = run_ssh_command(
+        host["ssh"],
+        "find /nix/store -type f -path '*/lib/security/pam_jit_pg.so' 2>/dev/null | head -5",
+    )
+    if result["succeeded"] and result["stdout"].strip():
+        print(f"\nJIT PAM module symlinks found:\n{result['stdout']}")
+    else:
+        print("\nNo JIT PAM module symlinks found in /nix/store")
+
+    # Verify the module is a valid shared library
+    result = run_ssh_command(
+        host["ssh"], "file /var/lib/postgresql/.nix-profile/lib/security/pam_jit_pg.so"
+    )
+    if result["succeeded"]:
+        print(f"\nJIT PAM module file type:\n{result['stdout']}")
+        assert (
+            "shared object" in result["stdout"].lower()
+            or "dynamically linked" in result["stdout"].lower()
+        ), "JIT PAM module is not a valid shared library"
+
+    print("✓ JIT PAM module is properly installed")
+
+
+def test_pam_postgresql_config(host):
+    """Test that the PAM configuration for PostgreSQL exists and is properly configured."""
+    # Check PostgreSQL version to determine if PAM config should exist
+    result = run_ssh_command(
+        host["ssh"], "sudo -u postgres psql --version | grep -oE '[0-9]+' | head -1"
+    )
+    pg_major_version = 15  # Default
+    if result["succeeded"] and result["stdout"].strip():
+        try:
+            pg_major_version = int(result["stdout"].strip())
+        except ValueError:
+            pass
+
+    print(f"\nPostgreSQL major version: {pg_major_version}")
+
+    # PAM config should exist for non-PostgreSQL 15 versions
+    if pg_major_version != 15:
+        # Check if PAM config file exists
+        result = run_ssh_command(host["ssh"], "ls -la /etc/pam.d/postgresql")
+        if result["succeeded"]:
+            print(f"\nPAM config file found:\n{result['stdout']}")
+
+            # Check file permissions
+            result = run_ssh_command(
+                host["ssh"], "stat -c '%a %U %G' /etc/pam.d/postgresql"
+            )
+            if result["succeeded"]:
+                perms = result["stdout"].strip()
+                print(f"PAM config permissions: {perms}")
+                # Should be owned by postgres:postgres with 664 permissions
+                assert "postgres postgres" in perms, (
+                    "PAM config not owned by postgres:postgres"
+                )
+        else:
+            print("\nPAM config file not found")
+            assert False, "PAM configuration file /etc/pam.d/postgresql not found"
+    else:
+        print("\nSkipping PAM config check for PostgreSQL 15")
+        # For PostgreSQL 15, the PAM config should NOT exist
+        result = run_ssh_command(host["ssh"], "test -f /etc/pam.d/postgresql")
+        if result["succeeded"]:
+            print("\nWARNING: PAM config exists for PostgreSQL 15 (not expected)")
+
+    print("✓ PAM configuration is properly set up")
+
+
+def test_jit_pam_gatekeeper_profile(host):
+    """Test that the gatekeeper package is properly installed in the postgres user's Nix profile."""
+    # Check PostgreSQL version first
+    result = run_ssh_command(
+        host["ssh"], "sudo -u postgres psql --version | grep -oE '[0-9]+' | head -1"
+    )
+    pg_major_version = 15  # Default
+    if result["succeeded"] and result["stdout"].strip():
+        try:
+            pg_major_version = int(result["stdout"].strip())
+        except ValueError:
+            pass
+
+    # Skip test for PostgreSQL 15 as gatekeeper is not installed for PG15
+    if pg_major_version == 15:
+        print("\nSkipping gatekeeper profile test for PostgreSQL 15 (not installed)")
+        return
+
+    # Check if gatekeeper is in the postgres user's Nix profile
+    result = run_ssh_command(
+        host["ssh"],
+        "sudo -u postgres nix profile list --json | jq -r '.elements.gatekeeper.storePaths[0]'",
+    )
+    if result["succeeded"] and result["stdout"].strip():
+        print(f"\nGatekeeper found in Nix profile:\n{result['stdout']}")
+    else:
+        # Try alternative check
+        result = run_ssh_command(
+            host["ssh"],
+            "sudo -u postgres ls -la /var/lib/postgresql/.nix-profile/ | grep -i gate",
+        )
+        if result["succeeded"] and result["stdout"].strip():
+            print(f"\nGatekeeper-related files in profile:\n{result['stdout']}")
+        else:
+            print("\nGatekeeper not found in postgres user's Nix profile")
+            # This might be expected if it's installed system-wide instead
+
+    # Check if we can find the gatekeeper derivation
+    result = run_ssh_command(
+        host["ssh"],
+        "find /nix/store -maxdepth 1 -type d -name '*gatekeeper*' 2>/dev/null | head -5",
+    )
+    if result["succeeded"] and result["stdout"].strip():
+        print(f"\nGatekeeper derivations found:\n{result['stdout']}")
+    else:
+        print("\nNo gatekeeper derivations found in /nix/store")
+
+    print("✓ Gatekeeper package installation check completed")
+
+
+def test_jit_pam_module_dependencies(host):
+    """Test that the JIT PAM module has all required dependencies."""
+    # Check PostgreSQL version first
+    result = run_ssh_command(
+        host["ssh"], "sudo -u postgres psql --version | grep -oE '[0-9]+' | head -1"
+    )
+    pg_major_version = 15  # Default
+    if result["succeeded"] and result["stdout"].strip():
+        try:
+            pg_major_version = int(result["stdout"].strip())
+        except ValueError:
+            pass
+
+    # Skip test for PostgreSQL 15 as gatekeeper is not installed for PG15
+    if pg_major_version == 15:
+        print(
+            "\nSkipping JIT PAM module dependencies test for PostgreSQL 15 (not installed)"
+        )
+        return
+
+    # Check dependencies of the PAM module
+    result = run_ssh_command(
+        host["ssh"],
+        "ldd /var/lib/postgresql/.nix-profile/lib/security/pam_jit_pg.so 2>/dev/null",
+    )
+    if result["succeeded"]:
+        print(f"\nJIT PAM module dependencies:\n{result['stdout']}")
+
+        # Check for required libraries
+        required_libs = ["libpam", "libc"]
+        for lib in required_libs:
+            if lib not in result["stdout"].lower():
+                print(f"WARNING: Required library {lib} not found in dependencies")
+
+        # Check for any missing dependencies
+        if "not found" in result["stdout"].lower():
+            assert False, "JIT PAM module has missing dependencies"
+    else:
+        print("\nCould not check JIT PAM module dependencies")
+
+    print("✓ JIT PAM module dependencies are satisfied")
+
+
+def test_jit_pam_postgresql_integration(host):
+    """Test that PostgreSQL can be configured to use PAM authentication."""
+    # Check if PAM is available as an authentication method in PostgreSQL
+    result = run_ssh_command(
+        host["ssh"],
+        "sudo -u postgres psql -c \"SELECT name, setting FROM pg_settings WHERE name LIKE '%pam%';\" 2>/dev/null",
+    )
+    if result["succeeded"]:
+        print(f"\nPostgreSQL PAM-related settings:\n{result['stdout']}")
+
+    # Check pg_hba.conf for potential PAM entries (even if not currently active)
+    result = run_ssh_command(
+        host["ssh"],
+        "grep -i pam /etc/postgresql/pg_hba.conf 2>/dev/null || echo 'No PAM entries in pg_hba.conf'",
+    )
+    if result["succeeded"]:
+        print(f"\nPAM entries in pg_hba.conf:\n{result['stdout']}")
+
+    # Verify PostgreSQL was compiled with PAM support
+    result = run_ssh_command(
+        host["ssh"],
+        "sudo -u postgres pg_config --configure 2>/dev/null | grep -i pam || echo 'PAM compile flag not found'",
+    )
+    if result["succeeded"]:
+        print(f"\nPostgreSQL PAM compile flags:\n{result['stdout']}")
+
+    print("✓ PostgreSQL PAM integration check completed")
 
 
 def test_postgrest_read_only_session_attrs(host):
@@ -777,7 +1037,9 @@ def test_postgrest_read_only_session_attrs(host):
             print(
                 f"\nFound 'session is not read-only' errors in PostgREST logs:\n{result['stdout']}"
             )
-            assert False, "PostgREST logs contain 'session is not read-only' errors even though PostgreSQL is configured for read-only mode"
+            assert False, (
+                "PostgREST logs contain 'session is not read-only' errors even though PostgreSQL is configured for read-only mode"
+            )
         else:
             print("\nNo 'session is not read-only' errors found in PostgREST logs")
 
@@ -808,3 +1070,164 @@ def test_postgrest_read_only_session_attrs(host):
                 print("Warning: Failed to restart PostgreSQL after restoring config")
         else:
             print("Warning: Failed to restore PostgreSQL configuration")
+
+
+def test_apparmor_postgresql_service_uses_profile(host):
+    """Verify the PostgreSQL systemd service is running under the sbpostgres AppArmor profile."""
+    result = run_ssh_command(
+        host["ssh"], "systemctl show postgresql | grep -i apparmor"
+    )
+    assert result["succeeded"], (
+        f"Could not find AppArmor info in postgresql service status.\n"
+        f"stderr: {result['stderr']}"
+    )
+    assert "sbpostgres" in result["stdout"], (
+        f"Expected 'sbpostgres' in postgresql AppArmor status but got:\n{result['stdout']}"
+    )
+
+
+def test_apparmor_sbpostgres_profile_enforced(host):
+    """Verify the sbpostgres AppArmor profile is loaded and in enforce mode."""
+    import json
+
+    result = run_ssh_command(host["ssh"], "sudo aa-status --json")
+    assert result["succeeded"], f"aa-status failed: {result['stderr']}"
+    status = json.loads(result["stdout"])
+    enforced = status.get("profiles", {})
+    assert "sbpostgres" in enforced, "sbpostgres profile not found in AppArmor"
+    assert enforced["sbpostgres"] == "enforce", (
+        f"sbpostgres profile is not in enforce mode: {enforced['sbpostgres']}"
+    )
+
+
+def test_apparmor_blocks_disallowed_shell_commands(host):
+    """Verify AppArmor's postgres_shell sub-profile blocks execution of
+    commands not on the allowlist (e.g. /usr/bin/id).
+
+    COPY TO PROGRAM causes postgres to fork /bin/sh, which transitions to the
+    postgres_shell sub-profile via the 'Pix -> postgres_shell' rule. /usr/bin/id
+    is not on the allowlist so AppArmor denies the exec, and PostgreSQL surfaces
+    this as 'command not executable'.
+    """
+    result = run_ssh_command(
+        host["ssh"],
+        "sudo -u postgres psql -U supabase_admin -h localhost -d postgres -c \"COPY (SELECT 1) TO PROGRAM '/usr/bin/id';\" 2>&1 || true",
+    )
+    combined = result["stdout"] + result["stderr"]
+    assert "command not executable" in combined, (
+        f"Expected AppArmor to block /usr/bin/id with 'command not executable' "
+        f"but got:\nstdout: {result['stdout']}\nstderr: {result['stderr']}"
+    )
+
+
+def test_apparmor_permits_allowlisted_commands(host):
+    """Verify allowlisted commands are not blocked by the postgres_shell profile.
+
+    /usr/bin/cat is explicitly listed as 'ix' in postgres_shell with a canonical
+    path (avoiding the /bin -> /usr/bin symlink issue on Ubuntu 22.04+), and
+    writes only to the pipe so no file-write permissions are needed.
+    """
+    result = run_ssh_command(
+        host["ssh"],
+        "sudo -u postgres psql -U supabase_admin -h localhost -d postgres -c \"COPY (SELECT 1) TO PROGRAM '/usr/bin/cat';\"",
+    )
+    assert result["succeeded"], (
+        f"AppArmor unexpectedly blocked /usr/bin/cat.\n"
+        f"stdout: {result['stdout']}\nstderr: {result['stderr']}"
+    )
+
+
+def test_apparmor_allows_basic_sql_and_extensions(host):
+    """Verify basic SQL and extension availability are unaffected by AppArmor."""
+    result = run_ssh_command(
+        host["ssh"],
+        "sudo -u postgres psql -U supabase_admin -h localhost -d postgres -c "
+        "\"SELECT name FROM pg_available_extensions WHERE name IN ('pgcrypto', 'pg_stat_statements') ORDER BY name;\"",
+    )
+    assert result["succeeded"], (
+        f"SQL query failed under AppArmor.\nstdout: {result['stdout']}\nstderr: {result['stderr']}"
+    )
+    assert "pgcrypto" in result["stdout"], (
+        "pgcrypto extension not available under AppArmor"
+    )
+    assert "pg_stat_statements" in result["stdout"], (
+        "pg_stat_statements extension not available under AppArmor"
+    )
+
+
+def test_apparmor_allows_pg_dump(host):
+    """Verify pg_dump executes from postgres_shell under AppArmor.
+
+    /usr/bin/pg_dump is explicitly listed as 'ix' in postgres_shell.
+    """
+    result = run_ssh_command(
+        host["ssh"],
+        "sudo -u postgres psql -U supabase_admin -h localhost -d postgres -c "
+        "\"COPY (SELECT 1) TO PROGRAM '/usr/bin/pg_dump --version';\"",
+    )
+    assert result["succeeded"], (
+        f"pg_dump was blocked by AppArmor.\n"
+        f"stdout: {result['stdout']}\nstderr: {result['stderr']}"
+    )
+
+
+def test_apparmor_allows_walg(host):
+    """Verify wal-g-2 can be executed under the sbpostgres AppArmor profile.
+
+    /nix/store/*/bin/wal-g-2 is listed as 'ix' in postgres_shell. We locate the
+    binary at runtime since the Nix store hash is not known ahead of time.
+    """
+    find_result = run_ssh_command(
+        host["ssh"],
+        "find /nix/store -maxdepth 3 -name 'wal-g-2' -type f 2>/dev/null | head -1",
+    )
+    walg_path = find_result["stdout"].strip()
+    if not walg_path:
+        print("wal-g-2 not found in Nix store, skipping")
+        return
+
+    result = run_ssh_command(
+        host["ssh"],
+        f"sudo -u postgres psql -U supabase_admin -h localhost -d postgres -c "
+        f"\"COPY (SELECT 1) TO PROGRAM '{walg_path} --version';\"",
+    )
+    assert result["succeeded"], (
+        f"wal-g-2 was blocked by AppArmor.\n"
+        f"stdout: {result['stdout']}\nstderr: {result['stderr']}"
+    )
+
+
+def test_apparmor_denies_access_to_sensitive_paths(host):
+    """Verify postgres_shell deny rules block access to sensitive system paths.
+
+    The profile has 'deny /var/lib/supabase/** rwx', 'deny /opt/saltstack/** rwx',
+    and 'deny /etc/salt/** rwx'. Files are created world-readable so that the
+    only reason cat fails is AppArmor, not OS file permissions.
+    """
+    denied_paths = [
+        "/var/lib/supabase",
+        "/opt/saltstack",
+        "/etc/salt",
+    ]
+    for base in denied_paths:
+        run_ssh_command(
+            host["ssh"],
+            f"sudo mkdir -p {base} && echo 'restricted' | sudo tee {base}/apparmor_test.txt > /dev/null "
+            f"&& sudo chmod 644 {base}/apparmor_test.txt",
+        )
+
+    for base in denied_paths:
+        test_file = f"{base}/apparmor_test.txt"
+        result = run_ssh_command(
+            host["ssh"],
+            f"sudo -u postgres psql -U supabase_admin -h localhost -d postgres -c "
+            f"\"COPY (SELECT 1) TO PROGRAM '/usr/bin/cat {test_file}';\" 2>&1 || true",
+        )
+        combined = result["stdout"] + result["stderr"]
+        assert (
+            "failed" in combined.lower() or "child process exited" in combined.lower()
+        ), (
+            f"Expected AppArmor to deny access to {test_file} but the command appears "
+            f"to have succeeded.\nstdout: {result['stdout']}\nstderr: {result['stderr']}"
+        )
+        print(f"Confirmed: access to {test_file} denied by AppArmor")

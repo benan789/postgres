@@ -12,7 +12,7 @@ let
       zlib,
       readline,
       openssl,
-      icu,
+      icu75,
       lz4,
       zstd,
       systemd,
@@ -21,7 +21,7 @@ let
       libxml2,
       tzdata,
       libkrb5,
-      substituteAll,
+      replaceVars,
       darwin,
       linux-pam,
       #orioledb specific
@@ -38,6 +38,9 @@ let
       enableSystemd ? null,
       gssSupport ? with stdenv.hostPlatform; !isWindows && !isStatic,
 
+      # Portable build variant - disables hardcoded system paths
+      portable ? false,
+
       # for postgresql.pkgs
       self,
       newScope,
@@ -46,6 +49,7 @@ let
       # source specification
       version,
       hash,
+      revision ? null,
       muslPatches ? { },
 
       # for tests
@@ -65,7 +69,7 @@ let
       # for <13 (where it got removed: https://github.com/postgres/postgres/commit/c45643d618e35ec2fe91438df15abd4f3c0d85ca)
       libxcrypt,
 
-      isOrioleDB ? false,
+      isOrioleDB ? (builtins.match "[0-9][0-9]_.*" version) != null,
     }@args:
     let
       atLeast = lib.versionAtLeast version;
@@ -88,18 +92,25 @@ let
       pname = pname + lib.optionalString jitSupport "-jit";
 
       src =
-        if (builtins.match "[0-9][0-9]_.*" version != null) then
-          fetchurl {
-            url = "https://github.com/orioledb/postgres/archive/refs/tags/patches${version}.tar.gz";
-            inherit hash;
-          }
+        if isOrioleDB then
+          if revision != null then
+            fetchurl {
+              url = "https://github.com/orioledb/postgres/archive/${revision}.tar.gz";
+              inherit hash;
+            }
+          else
+            fetchurl {
+              url = "https://github.com/orioledb/postgres/archive/refs/tags/patches${version}.tar.gz";
+              inherit hash;
+            }
         else
           fetchurl {
             url = "mirror://postgresql/source/v${version}/${pname}-${version}.tar.bz2";
             inherit hash;
           };
 
-      hardeningEnable = lib.optionals (!stdenv'.cc.isClang) [ "pie" ];
+      # The 'pie' hardening flag has been removed in favor of enabling PIE by default in compilers and should no longer be used.
+      # hardeningEnable = lib.optionals (!stdenv'.cc.isClang) [ "pie" ];
 
       outputs = [
         "out"
@@ -107,50 +118,49 @@ let
       ];
       setOutputFlags = false; # $out retains configureFlags :-/
 
-      buildInputs =
-        [
-          zlib
-          readline
-          openssl
-          (libxml2.override { python = python3; })
-          icu
-        ]
-        ++ lib.optionals (olderThan "13") [ libxcrypt ]
-        ++ lib.optionals jitSupport [ llvmPackages.llvm ]
-        ++ lib.optionals lz4Enabled [ lz4 ]
-        ++ lib.optionals zstdEnabled [ zstd ]
-        ++ lib.optionals systemdSupport' [ systemd ]
-        ++ lib.optionals pythonSupport [ python3 ]
-        ++ lib.optionals gssSupport [ libkrb5 ]
-        ++ lib.optionals stdenv'.isLinux [ linux-pam ]
-        ++ lib.optionals (!stdenv'.isDarwin) [ libossp_uuid ]
-        ++
-          lib.optionals
-            ((builtins.match "[0-9][0-9]_.*" version != null) || (lib.versionAtLeast version "17"))
-            [
-              perl
-              bison
-              flex
-              docbook_xsl
-              docbook_xml_dtd_45
-              docbook_xsl_ns
-              libxslt
-            ];
+      buildInputs = [
+        zlib
+        readline
+        openssl
+        (libxml2.override { python3 = python3; })
+        # Pin ICU to version 75 to maintain collation version 153.120
+        # This prevents collation mismatch warnings when upgrading nixpkgs
+        icu75
+      ]
+      ++ lib.optionals (olderThan "13") [ libxcrypt ]
+      ++ lib.optionals jitSupport [ llvmPackages.llvm ]
+      ++ lib.optionals lz4Enabled [ lz4 ]
+      ++ lib.optionals zstdEnabled [ zstd ]
+      ++ lib.optionals systemdSupport' [ systemd ]
+      ++ lib.optionals pythonSupport [ python3 ]
+      ++ lib.optionals gssSupport [ libkrb5 ]
+      ++ lib.optionals stdenv'.isLinux [ linux-pam ]
+      ++ lib.optionals (!stdenv'.isDarwin) [ libossp_uuid ];
 
-      nativeBuildInputs =
-        [
-          makeWrapper
-          pkg-config
-        ]
-        ++ lib.optionals jitSupport [
-          llvmPackages.llvm.dev
-          nukeReferences
-          patchelf
-        ];
+      nativeBuildInputs = [
+        makeWrapper
+        pkg-config
+      ]
+      # Build tools for PG17+ and OrioleDB - these are NOT runtime dependencies
+      ++ lib.optionals (isOrioleDB || (lib.versionAtLeast version "17")) [
+        perl
+        bison
+        flex
+        docbook_xsl
+        docbook_xml_dtd_45
+        docbook_xsl_ns
+        libxslt
+      ]
+      ++ lib.optionals jitSupport [
+        llvmPackages.llvm.dev
+        nukeReferences
+        patchelf
+      ];
 
       enableParallelBuilding = true;
 
       separateDebugInfo = true;
+      __structuredAttrs = true;
 
       buildFlags = [ "world-bin" ];
 
@@ -158,119 +168,117 @@ let
       # Fixed upstream in https://github.com/postgres/postgres/commit/0bc8cebdb889368abdf224aeac8bc197fe4c9ae6
       env.NIX_CFLAGS_COMPILE = lib.optionalString (olderThan "13") "-I${libxml2.dev}/include/libxml2";
 
-      configureFlags =
-        [
-          "--with-openssl"
-          "--with-libxml"
-          "--with-icu"
-          "--sysconfdir=/etc"
-          "--libdir=$(lib)/lib"
-          "--with-system-tzdata=${tzdata}/share/zoneinfo"
-          "--enable-debug"
-          (lib.optionalString systemdSupport' "--with-systemd")
-          (if stdenv'.isDarwin then "--with-uuid=e2fs" else "--with-ossp-uuid")
-        ]
-        ++ lib.optionals lz4Enabled [ "--with-lz4" ]
-        ++ lib.optionals zstdEnabled [ "--with-zstd" ]
-        ++ lib.optionals gssSupport [ "--with-gssapi" ]
-        ++ lib.optionals pythonSupport [ "--with-python" ]
-        ++ lib.optionals jitSupport [ "--with-llvm" ]
-        ++ lib.optionals stdenv'.isLinux [ "--with-pam" ];
+      configureFlags = [
+        "--with-openssl"
+        "--with-libxml"
+        "--with-icu"
+        "--sysconfdir=/etc"
+        "--libdir=$(lib)/lib"
+        "--enable-debug"
+        (lib.optionalString systemdSupport' "--with-systemd")
+        (if stdenv'.isDarwin then "--with-uuid=e2fs" else "--with-ossp-uuid")
+      ]
+      ++ lib.optionals (!portable) [ "--with-system-tzdata=${tzdata}/share/zoneinfo" ]
+      ++ lib.optionals lz4Enabled [ "--with-lz4" ]
+      ++ lib.optionals zstdEnabled [ "--with-zstd" ]
+      ++ lib.optionals gssSupport [ "--with-gssapi" ]
+      ++ lib.optionals pythonSupport [ "--with-python" ]
+      ++ lib.optionals jitSupport [ "--with-llvm" ]
+      ++ lib.optionals stdenv'.isLinux [ "--with-pam" ];
 
-      patches =
-        [
-          (
-            if atLeast "16" then
-              ./patches/relative-to-symlinks-16+.patch
-            else
-              ./patches/relative-to-symlinks.patch
-          )
-          ./patches/less-is-more.patch
-          ./patches/paths-for-split-outputs.patch
-          ./patches/specify_pkglibdir_at_runtime.patch
-          ./patches/paths-with-postgresql-suffix.patch
-
-          (substituteAll {
-            src = ./patches/locale-binary-path.patch;
-            locale = "${if stdenv.isDarwin then darwin.adv_cmds else lib.getBin stdenv.cc.libc}/bin/locale";
-          })
-        ]
-        ++ lib.optionals stdenv'.hostPlatform.isMusl (
-          # Using fetchurl instead of fetchpatch on purpose: https://github.com/NixOS/nixpkgs/issues/240141
-          map fetchurl (lib.attrValues muslPatches)
+      patches = [
+        (
+          if atLeast "16" then
+            ./patches/relative-to-symlinks-16+.patch
+          else
+            ./patches/relative-to-symlinks.patch
         )
-        ++ lib.optionals stdenv'.isLinux [
-          (if atLeast "13" then ./patches/socketdir-in-run-13+.patch else ./patches/socketdir-in-run.patch)
-        ];
+        ./patches/less-is-more.patch
+        ./patches/paths-for-split-outputs.patch
+        ./patches/specify_pkglibdir_at_runtime.patch
+        ./patches/paths-with-postgresql-suffix.patch
+      ]
+      ++ lib.optionals (!portable) [
+        (replaceVars ./patches/locale-binary-path.patch {
+          locale = "${if stdenv.isDarwin then darwin.adv_cmds else lib.getBin stdenv.cc.libc}/bin/locale";
+        })
+      ]
+      ++ lib.optionals stdenv'.hostPlatform.isMusl (
+        # Using fetchurl instead of fetchpatch on purpose: https://github.com/NixOS/nixpkgs/issues/240141
+        map fetchurl (lib.attrValues muslPatches)
+      )
+      ++ lib.optionals stdenv'.isLinux [
+        (if atLeast "13" then ./patches/socketdir-in-run-13+.patch else ./patches/socketdir-in-run.patch)
+      ];
 
       installTargets = [ "install-world-bin" ];
 
-      postPatch =
-        ''
-          # Hardcode the path to pgxs so pg_config returns the path in $out
-          substituteInPlace "src/common/config_info.c" --subst-var out
-        ''
-        + lib.optionalString jitSupport ''
-          # Force lookup of jit stuff in $out instead of $lib
-          substituteInPlace src/backend/jit/jit.c --replace pkglib_path \"$out/lib\"
-          substituteInPlace src/backend/jit/llvm/llvmjit.c --replace pkglib_path \"$out/lib\"
-          substituteInPlace src/backend/jit/llvm/llvmjit_inline.cpp --replace pkglib_path \"$out/lib\"
-        '';
-
-      postInstall =
-        ''
-          moveToOutput "lib/pgxs" "$out" # looks strange, but not deleting it
-          moveToOutput "lib/libpgcommon*.a" "$out"
-          moveToOutput "lib/libpgport*.a" "$out"
-          moveToOutput "lib/libecpg*" "$out"
-
-          # Prevent a retained dependency on gcc-wrapper.
-          substituteInPlace "$out/lib/pgxs/src/Makefile.global" --replace ${stdenv'.cc}/bin/ld ld
-
-          if [ -z "''${dontDisableStatic:-}" ]; then
-            # Remove static libraries in case dynamic are available.
-            for i in $out/lib/*.a $lib/lib/*.a; do
-              name="$(basename "$i")"
-              ext="${stdenv'.hostPlatform.extensions.sharedLibrary}"
-              if [ -e "$lib/lib/''${name%.a}$ext" ] || [ -e "''${i%.a}$ext" ]; then
-                rm "$i"
-              fi
-            done
-          fi
-        ''
-        + lib.optionalString jitSupport ''
-          # Move the bitcode and libllvmjit.so library out of $lib; otherwise, every client that
-          # depends on libpq.so will also have libLLVM.so in its closure too, bloating it
-          moveToOutput "lib/bitcode" "$out"
-          moveToOutput "lib/llvmjit*" "$out"
-
-          # In the case of JIT support, prevent a retained dependency on clang-wrapper
-          substituteInPlace "$out/lib/pgxs/src/Makefile.global" --replace ${stdenv'.cc}/bin/clang clang
-          nuke-refs $out/lib/llvmjit_types.bc $(find $out/lib/bitcode -type f)
-
-          # Stop out depending on the default output of llvm
-          substituteInPlace $out/lib/pgxs/src/Makefile.global \
-            --replace ${llvmPackages.llvm.out}/bin "" \
-            --replace '$(LLVM_BINPATH)/' ""
-
-          # Stop out depending on the -dev output of llvm
-          substituteInPlace $out/lib/pgxs/src/Makefile.global \
-            --replace ${llvmPackages.llvm.dev}/bin/llvm-config llvm-config \
-            --replace -I${llvmPackages.llvm.dev}/include ""
-
-          ${lib.optionalString (!stdenv'.isDarwin) ''
-            # Stop lib depending on the -dev output of llvm
-            rpath=$(patchelf --print-rpath $out/lib/llvmjit.so)
-            nuke-refs -e $out $out/lib/llvmjit.so
-            # Restore the correct rpath
-            patchelf $out/lib/llvmjit.so --set-rpath "$rpath"
-          ''}
-        '';
-
-      postFixup = lib.optionalString (!stdenv'.isDarwin && stdenv'.hostPlatform.libc == "glibc") ''
-        # initdb needs access to "locale" command from glibc.
-        wrapProgram $out/bin/initdb --prefix PATH ":" ${glibc.bin}/bin
+      postPatch = ''
+        # Hardcode the path to pgxs so pg_config returns the path in $out
+        substituteInPlace "src/common/config_info.c" --subst-var out
+      ''
+      + lib.optionalString jitSupport ''
+        # Force lookup of jit stuff in $out instead of $lib
+        substituteInPlace src/backend/jit/jit.c --replace pkglib_path \"$out/lib\"
+        substituteInPlace src/backend/jit/llvm/llvmjit.c --replace pkglib_path \"$out/lib\"
+        substituteInPlace src/backend/jit/llvm/llvmjit_inline.cpp --replace pkglib_path \"$out/lib\"
       '';
+
+      postInstall = ''
+        moveToOutput "lib/pgxs" "$out" # looks strange, but not deleting it
+        moveToOutput "lib/libpgcommon*.a" "$out"
+        moveToOutput "lib/libpgport*.a" "$out"
+        moveToOutput "lib/libecpg*" "$out"
+
+        # Prevent a retained dependency on gcc-wrapper.
+        substituteInPlace "$out/lib/pgxs/src/Makefile.global" --replace ${stdenv'.cc}/bin/ld ld
+
+        if [ -z "''${dontDisableStatic:-}" ]; then
+          # Remove static libraries in case dynamic are available.
+          for i in $out/lib/*.a $lib/lib/*.a; do
+            name="$(basename "$i")"
+            ext="${stdenv'.hostPlatform.extensions.sharedLibrary}"
+            if [ -e "$lib/lib/''${name%.a}$ext" ] || [ -e "''${i%.a}$ext" ]; then
+              rm "$i"
+            fi
+          done
+        fi
+      ''
+      + lib.optionalString jitSupport ''
+        # Move the bitcode and libllvmjit.so library out of $lib; otherwise, every client that
+        # depends on libpq.so will also have libLLVM.so in its closure too, bloating it
+        moveToOutput "lib/bitcode" "$out"
+        moveToOutput "lib/llvmjit*" "$out"
+
+        # In the case of JIT support, prevent a retained dependency on clang-wrapper
+        substituteInPlace "$out/lib/pgxs/src/Makefile.global" --replace ${stdenv'.cc}/bin/clang clang
+        nuke-refs $out/lib/llvmjit_types.bc $(find $out/lib/bitcode -type f)
+
+        # Stop out depending on the default output of llvm
+        substituteInPlace $out/lib/pgxs/src/Makefile.global \
+          --replace ${llvmPackages.llvm.out}/bin "" \
+          --replace '$(LLVM_BINPATH)/' ""
+
+        # Stop out depending on the -dev output of llvm
+        substituteInPlace $out/lib/pgxs/src/Makefile.global \
+          --replace ${llvmPackages.llvm.dev}/bin/llvm-config llvm-config \
+          --replace -I${llvmPackages.llvm.dev}/include ""
+
+        ${lib.optionalString (!stdenv'.isDarwin) ''
+          # Stop lib depending on the -dev output of llvm
+          rpath=$(patchelf --print-rpath $out/lib/llvmjit.so)
+          nuke-refs -e $out $out/lib/llvmjit.so
+          # Restore the correct rpath
+          patchelf $out/lib/llvmjit.so --set-rpath "$rpath"
+        ''}
+      '';
+
+      postFixup =
+        lib.optionalString (!portable && !stdenv'.isDarwin && stdenv'.hostPlatform.libc == "glibc")
+          ''
+            # initdb needs access to "locale" command from glibc.
+            wrapProgram $out/bin/initdb --prefix PATH ":" ${glibc.bin}/bin
+          '';
 
       doCheck = !stdenv'.isDarwin;
       # autodetection doesn't seem to able to find this, but it's there.
@@ -285,12 +293,19 @@ let
         in
         {
           psqlSchema = lib.versions.major version;
+          inherit revision;
 
           withJIT = if jitSupport then this else jitToggle;
           withoutJIT = if jitSupport then jitToggle else this;
 
           dlSuffix = if olderThan "16" then ".so" else stdenv.hostPlatform.extensions.sharedLibrary;
           inherit isOrioleDB;
+
+          patchset =
+            if isOrioleDB then
+              if revision != null then revision else builtins.elemAt (builtins.split "_" version) 2
+            else
+              null;
 
           pkgs =
             let
@@ -312,22 +327,21 @@ let
             postgresql = this;
           } this.pkgs;
 
-          tests =
-            {
-              postgresql-wal-receiver = import ../../../../nixos/tests/postgresql-wal-receiver.nix {
-                inherit (stdenv) system;
-                pkgs = self;
-                package = this;
-              };
-              pkg-config = testers.testMetaPkgConfig finalAttrs.finalPackage;
-            }
-            // lib.optionalAttrs jitSupport {
-              postgresql-jit = import ../../../../nixos/tests/postgresql-jit.nix {
-                inherit (stdenv) system;
-                pkgs = self;
-                package = this;
-              };
+          tests = {
+            postgresql-wal-receiver = import ../../../../nixos/tests/postgresql-wal-receiver.nix {
+              inherit (stdenv.hostPlatform) system;
+              pkgs = self;
+              package = this;
             };
+            pkg-config = testers.testMetaPkgConfig finalAttrs.finalPackage;
+          }
+          // lib.optionalAttrs jitSupport {
+            postgresql-jit = import ../../../../nixos/tests/postgresql-jit.nix {
+              inherit (stdenv.hostPlatform) system;
+              pkgs = self;
+              package = this;
+            };
+          };
         };
 
       meta = with lib; {
@@ -335,6 +349,7 @@ let
         description = "Powerful, open source object-relational database system";
         license = licenses.postgresql;
         changelog = "https://www.postgresql.org/docs/release/${finalAttrs.version}/";
+        teams = [ ];
         maintainers = with maintainers; [
           thoughtpolice
           danbst
@@ -404,7 +419,13 @@ let
       '';
 
       passthru = {
-        inherit (postgresql) version psqlSchema isOrioleDB;
+        inherit (postgresql)
+          version
+          revision
+          patchset
+          psqlSchema
+          isOrioleDB
+          ;
       };
     };
 in

@@ -1,0 +1,183 @@
+- name: tuned - Install and configure tuned
+  when:
+    - (stage2_nix or nixpkg_mode or debpkg_mode)
+  block:
+    - name: tuned - Install tuned
+      ansible.builtin.apt:
+        force_apt_get: true
+        name: 'tuned'
+        policy_rc_d: 101
+        state: 'present'
+        update_cache: true
+      become: true
+
+    - name: tuned - Create a tuned profile directory
+      ansible.builtin.file:
+        group: 'root'
+        mode: '0755'
+        owner: 'root'
+        path: '/etc/tuned/profiles/postgresql'
+        state: 'directory'
+      become: true
+
+    - name: tuned - Create a profile symlink for older tuned versions
+      ansible.builtin.file:
+        force: true
+        group: 'root'
+        mode: '0755'
+        owner: 'root'
+        path: '/etc/tuned/postgresql'
+        src: '/etc/tuned/profiles/postgresql'
+        state: 'link'
+      become: true
+
+    - name: tuned - Create a tuned profile
+      ansible.builtin.ini_file:
+        create: true
+        group: 'root'
+        mode: '0644'
+        no_extra_spaces: true
+        option: 'summary'
+        path: '/etc/tuned/profiles/postgresql/tuned.conf'
+        section: 'main'
+        state: 'present'
+        value: 'Tuned profile for PostgreSQL'
+      become: true
+
+    - name: tuned - Disable Transparent Huge Pages (THP)
+      ansible.builtin.ini_file:
+        create: true
+        group: 'root'
+        mode: '0644'
+        no_extra_spaces: true
+        option: 'transparent_hugepages'
+        path: '/etc/tuned/profiles/postgresql/tuned.conf'
+        section: 'vm'
+        state: 'present'
+        value: 'never'
+      become: true
+
+    - name: tuned - Configure performance
+      ansible.builtin.ini_file:
+        create: true
+        group: 'root'
+        mode: '0644'
+        no_extra_spaces: true
+        option: "{{ perf_item['option'] }}"
+        path: '/etc/tuned/profiles/postgresql/tuned.conf'
+        section: "{{ perf_item['section'] }}"
+        state: 'present'
+        value: "{{ perf_item['value'] }}"
+      become: true
+      loop:
+        - { option: 'governor', section: 'cpu', value: 'performance' }
+      loop_control:
+        loop_var: 'perf_item'
+
+    - name: tuned - Configure Intel CPUs for maximum performance
+      ansible.builtin.ini_file:
+        create: true
+        group: 'root'
+        mode: '0644'
+        no_extra_spaces: true
+        option: "{{ intel_item['option'] }}"
+        path: '/etc/tuned/profiles/postgresql/tuned.conf'
+        section: "{{ intel_item['section'] }}"
+        state: 'present'
+        value: "{{ intel_item['value'] }}"
+      become: true
+      loop:
+        - { option: 'energy_perf_bias', section: 'cpu', value: 'performance' }
+        - { option: 'min_perf_pct',     section: 'cpu', value: '100' }
+      loop_control:
+        loop_var: 'intel_item'
+      when:
+        - ansible_facts['processor'][0] is search('GenuineIntel', ignorecase=True)
+
+    - name: tuned - Set sysctl parameters
+      ansible.builtin.ini_file:
+        create: true
+        group: 'root'
+        mode: '0644'
+        no_extra_spaces: true
+        option: "{{ sysctl_item['option'] }}"
+        path: '/etc/tuned/profiles/postgresql/tuned.conf'
+        section: 'sysctl'
+        state: 'present'
+        value: "{{ sysctl_item['value'] }}"
+      become: true
+      loop:
+        - { option: 'net.ipv4.tcp_keepalive_intvl',      value: '60' }
+        - { option: 'net.ipv4.tcp_keepalive_time',       value: '1800' }
+        - { option: 'net.ipv4.ip_local_reserved_ports', value: '3000,3001,8085,9122,9187,9999' }
+        - { option: 'net.ipv4.ip_local_port_range',     value: '1025 65000' }
+        - { option: 'vm.panic_on_oom',                   value: '1' }
+        - { option: 'net.core.somaxconn',                value: '16834' }
+      loop_control:
+        loop_var: 'sysctl_item'
+
+    - name: tuned - Set kernel.panic=10
+      ansible.builtin.ini_file:
+        create: true
+        group: 'root'
+        mode: '0644'
+        no_extra_spaces: true
+        option: 'kernel.panic'
+        path: '/etc/tuned/profiles/postgresql/tuned.conf'
+        section: 'sysctl'
+        state: 'present'
+        value: '10'
+      become: true
+      when:
+        - (debpkg_mode or nixpkg_mode)
+
+    - name: tuned - Enable zswap if swap is present
+      when:
+        - ansible_facts['swaptotal_mb'] > 0
+      block:
+        - name: tuned - Decrease the kernel swappiness
+          ansible.builtin.ini_file:
+            create: true
+            group: 'root'
+            mode: '0644'
+            no_extra_spaces: true
+            option: 'vm.swappiness'
+            path: '/etc/tuned/profiles/postgresql/tuned.conf'
+            section: 'sysctl'
+            state: 'present'
+            value: '10'
+          become: true
+
+        - name: tuned - Load zstd compressor module
+          community.general.modprobe:
+            name: 'zstd'
+            persistent: 'present'
+            state: 'present'
+          become: true
+
+        - name: tuned - Configure and enable zswap
+          ansible.builtin.shell:
+            cmd: "echo {{ zswap_item['value'] }}  > /sys/module/zswap/parameters/{{ zswap_item['param'] }}"
+          loop:
+            - { param: 'compressor',       value: 'zstd' }
+            - { param: 'max_pool_percent', value: '10' }
+            - { param: 'zpool',            value: 'zsmalloc' }
+            - { param: 'enabled',          value: 'Y' }
+          loop_control:
+            loop_var: 'zswap_item'
+
+    - name: tuned - Activate the tuned service
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+        enabled: true
+        name: 'tuned'
+        state: "{{ 'restarted' if stage2_nix else 'stopped' }}"
+      become: true
+
+    - name: tuned - Activate the PostgreSQL tuned profile
+      ansible.builtin.command:
+        cmd: 'tuned-adm profile postgresql'
+      become: true
+      changed_when: false
+      when:
+        - stage2_nix

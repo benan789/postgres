@@ -75,20 +75,6 @@ CREATE SCHEMA vault;
 
 
 --
--- Name: pg_graphql; Type: EXTENSION; Schema: -; Owner: -
---
-
-CREATE EXTENSION IF NOT EXISTS pg_graphql WITH SCHEMA graphql;
-
-
---
--- Name: EXTENSION pg_graphql; Type: COMMENT; Schema: -; Owner: -
---
-
-COMMENT ON EXTENSION pg_graphql IS 'pg_graphql: GraphQL support';
-
-
---
 -- Name: pg_stat_statements; Type: EXTENSION; Schema: -; Owner: -
 --
 
@@ -228,54 +214,43 @@ COMMENT ON FUNCTION extensions.grant_pg_cron_access() IS 'Grants access to pg_cr
 CREATE FUNCTION extensions.grant_pg_graphql_access() RETURNS event_trigger
     LANGUAGE plpgsql
     AS $_$
-DECLARE
-    func_is_graphql_resolve bool;
-BEGIN
-    func_is_graphql_resolve = (
-        SELECT n.proname = 'resolve'
-        FROM pg_event_trigger_ddl_commands() AS ev
-        LEFT JOIN pg_catalog.pg_proc AS n
-        ON ev.objid = n.oid
-    );
+begin
+    if not exists (
+        select 1
+        from pg_event_trigger_ddl_commands() ev
+        join pg_catalog.pg_extension e on ev.objid = e.oid
+        where e.extname = 'pg_graphql'
+    ) then
+        return;
+    end if;
 
-    IF func_is_graphql_resolve
-    THEN
-        -- Update public wrapper to pass all arguments through to the pg_graphql resolve func
-        DROP FUNCTION IF EXISTS graphql_public.graphql;
-        create or replace function graphql_public.graphql(
-            "operationName" text default null,
-            query text default null,
-            variables jsonb default null,
-            extensions jsonb default null
-        )
-            returns jsonb
-            language sql
-        as $$
-            select graphql.resolve(
-                query := query,
-                variables := coalesce(variables, '{}'),
-                "operationName" := "operationName",
-                extensions := extensions
-            );
-        $$;
+    drop function if exists graphql_public.graphql;
+    create or replace function graphql_public.graphql(
+        "operationName" text default null,
+        query text default null,
+        variables jsonb default null,
+        extensions jsonb default null
+    )
+        returns jsonb
+        language sql
+    as $$
+        select graphql.resolve(
+            query := query,
+            variables := coalesce(variables, '{}'),
+            "operationName" := "operationName",
+            extensions := extensions
+        );
+    $$;
 
-        -- This hook executes when `graphql.resolve` is created. That is not necessarily the last
-        -- function in the extension so we need to grant permissions on existing entities AND
-        -- update default permissions to any others that are created after `graphql.resolve`
-        grant usage on schema graphql to postgres, anon, authenticated, service_role;
-        grant select on all tables in schema graphql to postgres, anon, authenticated, service_role;
-        grant execute on all functions in schema graphql to postgres, anon, authenticated, service_role;
-        grant all on all sequences in schema graphql to postgres, anon, authenticated, service_role;
-        alter default privileges in schema graphql grant all on tables to postgres, anon, authenticated, service_role;
-        alter default privileges in schema graphql grant all on functions to postgres, anon, authenticated, service_role;
-        alter default privileges in schema graphql grant all on sequences to postgres, anon, authenticated, service_role;
+    -- Attach the wrapper to the extension so DROP EXTENSION cascades to it,
+    -- which in turn triggers set_graphql_placeholder to reinstall the "not enabled" stub.
+    alter extension pg_graphql add function graphql_public.graphql(text, text, jsonb, jsonb);
 
-        -- Allow postgres role to allow granting usage on graphql and graphql_public schemas to custom roles
-        grant usage on schema graphql_public to postgres with grant option;
-        grant usage on schema graphql to postgres with grant option;
-    END IF;
-
-END;
+    grant usage on schema graphql to postgres, anon, authenticated, service_role;
+    grant execute on function graphql.resolve to postgres, anon, authenticated, service_role;
+    grant usage on schema graphql to postgres with grant option;
+    grant usage on schema graphql_public to postgres with grant option;
+end;
 $_$;
 
 
@@ -473,11 +448,45 @@ COMMENT ON FUNCTION extensions.set_graphql_placeholder() IS 'Reintroduces placeh
 
 
 --
+-- Name: graphql(text, text, jsonb, jsonb); Type: FUNCTION; Schema: graphql_public; Owner: -
+--
+
+CREATE FUNCTION graphql_public.graphql("operationName" text DEFAULT NULL::text, query text DEFAULT NULL::text, variables jsonb DEFAULT NULL::jsonb, extensions jsonb DEFAULT NULL::jsonb) RETURNS jsonb
+    LANGUAGE plpgsql
+    AS $$
+            DECLARE
+                server_version float;
+            BEGIN
+                server_version = (SELECT (SPLIT_PART((select version()), ' ', 2))::float);
+
+                IF server_version >= 14 THEN
+                    RETURN jsonb_build_object(
+                        'errors', jsonb_build_array(
+                            jsonb_build_object(
+                                'message', 'pg_graphql extension is not enabled.'
+                            )
+                        )
+                    );
+                ELSE
+                    RETURN jsonb_build_object(
+                        'errors', jsonb_build_array(
+                            jsonb_build_object(
+                                'message', 'pg_graphql is only available on projects running Postgres 14 onwards.'
+                            )
+                        )
+                    );
+                END IF;
+            END;
+        $$;
+
+
+--
 -- Name: get_auth(text); Type: FUNCTION; Schema: pgbouncer; Owner: -
 --
 
 CREATE FUNCTION pgbouncer.get_auth(p_usename text) RETURNS TABLE(username text, password text)
     LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO ''
     AS $_$
 begin
     raise debug 'PgBouncer auth request: %', p_usename;
@@ -493,73 +502,6 @@ begin
     where rolname=$1 and rolcanlogin;
 end;
 $_$;
-
-
---
--- Name: extension(text); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.extension(name text) RETURNS text
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-_parts text[];
-_filename text;
-BEGIN
-    select string_to_array(name, '/') into _parts;
-    select _parts[array_length(_parts,1)] into _filename;
-    -- @todo return the last part instead of 2
-    return split_part(_filename, '.', 2);
-END
-$$;
-
-
---
--- Name: filename(text); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.filename(name text) RETURNS text
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-_parts text[];
-BEGIN
-    select string_to_array(name, '/') into _parts;
-    return _parts[array_length(_parts,1)];
-END
-$$;
-
-
---
--- Name: foldername(text); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.foldername(name text) RETURNS text[]
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-_parts text[];
-BEGIN
-    select string_to_array(name, '/') into _parts;
-    return _parts[1:array_length(_parts,1)-1];
-END
-$$;
-
-
---
--- Name: search(text, text, integer, integer, integer); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.search(prefix text, bucketname text, limits integer DEFAULT 100, levels integer DEFAULT 1, offsets integer DEFAULT 0) RETURNS TABLE(name text, id uuid, updated_at timestamp with time zone, created_at timestamp with time zone, last_accessed_at timestamp with time zone, metadata jsonb)
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-_bucketId text;
-BEGIN
-    -- will be replaced by migrations when server starts
-    -- saving space for cloud-init
-END
-$$;
 
 
 SET default_tablespace = '';
@@ -703,48 +645,7 @@ COMMENT ON TABLE auth.users IS 'Auth: Stores user login data within a secure sch
 --
 
 CREATE TABLE public.schema_migrations (
-    version character varying(128) NOT NULL
-);
-
-
---
--- Name: buckets; Type: TABLE; Schema: storage; Owner: -
---
-
-CREATE TABLE storage.buckets (
-    id text NOT NULL,
-    name text NOT NULL,
-    owner uuid,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now()
-);
-
-
---
--- Name: migrations; Type: TABLE; Schema: storage; Owner: -
---
-
-CREATE TABLE storage.migrations (
-    id integer NOT NULL,
-    name character varying(100) NOT NULL,
-    hash character varying(40) NOT NULL,
-    executed_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
-);
-
-
---
--- Name: objects; Type: TABLE; Schema: storage; Owner: -
---
-
-CREATE TABLE storage.objects (
-    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
-    bucket_id text,
-    name text,
-    owner uuid,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now(),
-    last_accessed_at timestamp with time zone DEFAULT now(),
-    metadata jsonb
+    version character varying NOT NULL
 );
 
 
@@ -812,38 +713,6 @@ ALTER TABLE ONLY public.schema_migrations
 
 
 --
--- Name: buckets buckets_pkey; Type: CONSTRAINT; Schema: storage; Owner: -
---
-
-ALTER TABLE ONLY storage.buckets
-    ADD CONSTRAINT buckets_pkey PRIMARY KEY (id);
-
-
---
--- Name: migrations migrations_name_key; Type: CONSTRAINT; Schema: storage; Owner: -
---
-
-ALTER TABLE ONLY storage.migrations
-    ADD CONSTRAINT migrations_name_key UNIQUE (name);
-
-
---
--- Name: migrations migrations_pkey; Type: CONSTRAINT; Schema: storage; Owner: -
---
-
-ALTER TABLE ONLY storage.migrations
-    ADD CONSTRAINT migrations_pkey PRIMARY KEY (id);
-
-
---
--- Name: objects objects_pkey; Type: CONSTRAINT; Schema: storage; Owner: -
---
-
-ALTER TABLE ONLY storage.objects
-    ADD CONSTRAINT objects_pkey PRIMARY KEY (id);
-
-
---
 -- Name: audit_logs_instance_id_idx; Type: INDEX; Schema: auth; Owner: -
 --
 
@@ -886,57 +755,6 @@ CREATE INDEX users_instance_id_idx ON auth.users USING btree (instance_id);
 
 
 --
--- Name: bname; Type: INDEX; Schema: storage; Owner: -
---
-
-CREATE UNIQUE INDEX bname ON storage.buckets USING btree (name);
-
-
---
--- Name: bucketid_objname; Type: INDEX; Schema: storage; Owner: -
---
-
-CREATE UNIQUE INDEX bucketid_objname ON storage.objects USING btree (bucket_id, name);
-
-
---
--- Name: name_prefix_search; Type: INDEX; Schema: storage; Owner: -
---
-
-CREATE INDEX name_prefix_search ON storage.objects USING btree (name text_pattern_ops);
-
-
---
--- Name: buckets buckets_owner_fkey; Type: FK CONSTRAINT; Schema: storage; Owner: -
---
-
-ALTER TABLE ONLY storage.buckets
-    ADD CONSTRAINT buckets_owner_fkey FOREIGN KEY (owner) REFERENCES auth.users(id);
-
-
---
--- Name: objects objects_bucketId_fkey; Type: FK CONSTRAINT; Schema: storage; Owner: -
---
-
-ALTER TABLE ONLY storage.objects
-    ADD CONSTRAINT "objects_bucketId_fkey" FOREIGN KEY (bucket_id) REFERENCES storage.buckets(id);
-
-
---
--- Name: objects objects_owner_fkey; Type: FK CONSTRAINT; Schema: storage; Owner: -
---
-
-ALTER TABLE ONLY storage.objects
-    ADD CONSTRAINT objects_owner_fkey FOREIGN KEY (owner) REFERENCES auth.users(id);
-
-
---
--- Name: objects; Type: ROW SECURITY; Schema: storage; Owner: -
---
-
-ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
-
---
 -- Name: supabase_realtime; Type: PUBLICATION; Schema: -; Owner: -
 --
 
@@ -966,7 +784,7 @@ CREATE EVENT TRIGGER issue_pg_cron_access ON ddl_command_end
 --
 
 CREATE EVENT TRIGGER issue_pg_graphql_access ON ddl_command_end
-         WHEN TAG IN ('CREATE FUNCTION')
+         WHEN TAG IN ('CREATE EXTENSION')
    EXECUTE FUNCTION extensions.grant_pg_graphql_access();
 
 

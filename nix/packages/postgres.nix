@@ -1,11 +1,13 @@
-{ self, inputs, ... }:
+{ inputs, ... }:
 {
   perSystem =
-    { pkgs, ... }:
+    { pkgs, lib, ... }:
     let
-      gitRev = "vcs=${self.shortRev or "dirty"}+${
-        builtins.substring 0 8 (self.lastModifiedDate or self.lastModified or "19700101")
-      }";
+      # Minimal glibc locales for slim images - only en_US.UTF-8 (~3MB vs ~200MB)
+      glibcLocalesMinimal = pkgs.glibcLocales.override {
+        allLocales = false;
+        locales = [ "en_US.UTF-8/UTF-8" ];
+      };
 
       # Custom extensions that exist in our repository. These aren't upstream
       # either because nobody has done the work, maintaining them here is
@@ -19,7 +21,7 @@
       ourExtensions = [
         ../ext/rum.nix
         ../ext/timescaledb.nix
-        ../ext/pgroonga.nix
+        ../ext/pgroonga
         ../ext/index_advisor.nix
         ../ext/wal2json.nix
         ../ext/pgmq
@@ -29,7 +31,7 @@
         ../ext/pgjwt.nix
         ../ext/pgaudit.nix
         ../ext/postgis.nix
-        ../ext/pgrouting.nix
+        ../ext/pgrouting
         ../ext/pgtap.nix
         ../ext/pg_cron
         ../ext/pgsql-http.nix
@@ -38,13 +40,15 @@
         ../ext/pg_hashids.nix
         ../ext/pgsodium.nix
         ../ext/pg_stat_monitor.nix
+        ../ext/pg_jsonschema
+        ../ext/pg_partman.nix
         ../ext/pgvector.nix
         ../ext/vault.nix
         ../ext/hypopg.nix
         ../ext/pg_tle.nix
         ../ext/wrappers/default.nix
         ../ext/supautils.nix
-        ../ext/plv8.nix
+        ../ext/plv8
         ../ext/pg_search.nix
       ];
 
@@ -52,12 +56,29 @@
       # plus the orioledb option
       #we're not using timescaledb or plv8 in the orioledb-17 version or pg 17 of supabase extensions
       orioleFilteredExtensions = builtins.filter (
-        x: x != ../ext/timescaledb.nix && x != ../ext/timescaledb-2.9.1.nix && x != ../ext/plv8.nix
+        x: x != ../ext/timescaledb.nix && x != ../ext/timescaledb-2.9.1.nix && x != ../ext/plv8
       ) ourExtensions;
 
       orioledbExtensions = orioleFilteredExtensions ++ [ ../ext/orioledb.nix ];
       dbExtensions17 = orioleFilteredExtensions;
-      getPostgresqlPackage = version: pkgs."postgresql_${version}";
+
+      # CLI extensions - minimal set for Supabase CLI with migration support
+      cliExtensions = [
+        ../ext/supautils.nix
+        ../ext/pg_graphql
+        ../ext/pgsodium.nix
+        ../ext/vault.nix
+        ../ext/pg_net.nix
+        ../ext/pg_cron
+        ../ext/pg-safeupdate.nix
+      ];
+
+      getPostgresqlPackage =
+        version: latestOnly:
+        let
+          base = pkgs."postgresql_${version}";
+        in
+        if latestOnly then base.override { systemdSupport = false; } else base;
       # Create a 'receipt' file for a given postgresql package. This is a way
       # of adding a bit of metadata to the package, which can be used by other
       # tools to inspect what the contents of the install are: the PSQL
@@ -79,7 +100,6 @@
           name = "receipt";
           destination = "/receipt.json";
           text = builtins.toJSON {
-            revision = gitRev;
             psql-version = pgbin.version;
             nixpkgs = {
               revision = inputs.nixpkgs.rev;
@@ -96,30 +116,54 @@
 
       makeOurPostgresPkgs =
         version:
+        {
+          variant ? "full",
+          latestOnly ? false,
+        }:
         let
-          postgresql = getPostgresqlPackage version;
+          postgresql = getPostgresqlPackage version latestOnly;
           extensionsToUse =
-            if (builtins.elem version [ "orioledb-17" ]) then
+            if variant == "cli" then
+              cliExtensions
+            else if (builtins.elem version [ "orioledb-17" ]) then
               orioledbExtensions
             else if (builtins.elem version [ "17" ]) then
               dbExtensions17
             else
               ourExtensions;
+          extCallPackage = pkgs.lib.callPackageWith (
+            pkgs
+            // {
+              inherit postgresql latestOnly;
+              switch-ext-version = extCallPackage ./switch-ext-version.nix { };
+              overlayfs-on-package = extCallPackage ./overlayfs-on-package.nix { };
+            }
+          );
         in
-        map (path: pkgs.callPackage path { inherit postgresql; }) extensionsToUse;
+        map (path: extCallPackage path { }) extensionsToUse;
 
       # Create an attrset that contains all the extensions included in a server.
       makeOurPostgresPkgsSet =
         version:
-        (builtins.listToAttrs (
-          map (drv: {
-            name = drv.pname;
-            value = drv;
-          }) (makeOurPostgresPkgs version)
-        ))
-        // {
-          recurseForDerivations = true;
-        };
+        {
+          variant ? "full",
+          latestOnly ? false,
+        }:
+        let
+          pkgsList = makeOurPostgresPkgs version { inherit variant latestOnly; };
+          baseAttrs = builtins.listToAttrs (
+            map (drv: {
+              name = drv.name;
+              value = drv;
+            }) pkgsList
+          );
+          # Expose individual packages from extensions that have them in passthru.packages
+          # This makes them discoverable by nix-eval-jobs --force-recurse
+          individualPkgs = lib.concatMapAttrs (
+            name: drv: lib.optionalAttrs (drv ? passthru.packages) { "${name}-pkgs" = drv.passthru.packages; }
+          ) baseAttrs;
+        in
+        baseAttrs // individualPkgs // { recurseForDerivations = true; };
 
       # Create a binary distribution of PostgreSQL, given a version.
       #
@@ -131,21 +175,37 @@
       # basis for building extensions, etc.
       makePostgresBin =
         version:
+        {
+          variant ? "full",
+          latestOnly ? false,
+        }:
         let
-          postgresql = getPostgresqlPackage version;
+          # For CLI variant, override PostgreSQL to be portable (no hardcoded /nix/store paths)
+          postgresql =
+            let
+              base = getPostgresqlPackage version latestOnly;
+            in
+            if variant == "cli" then base.override { portable = true; } else base;
+          postgres-pkgs = makeOurPostgresPkgs version { inherit variant latestOnly; };
           ourExts = map (ext: {
-            name = ext.pname;
+            name = ext.name;
             version = ext.version;
-          }) (makeOurPostgresPkgs version);
+          }) postgres-pkgs;
 
-          pgbin = postgresql.withPackages (_ps: makeOurPostgresPkgs version);
+          pgbin = postgresql.withPackages (_ps: postgres-pkgs);
+
+          # For slim packages, include minimal glibc locales for initdb locale support
+          extraPaths = lib.optionals (latestOnly && pkgs.stdenv.isLinux) [
+            glibcLocalesMinimal
+          ];
         in
         pkgs.symlinkJoin {
           inherit (pgbin) name version;
           paths = [
             pgbin
             (makeReceipt pgbin ourExts)
-          ];
+          ]
+          ++ extraPaths;
         };
 
       # Create an attribute set, containing all the relevant packages for a
@@ -157,18 +217,39 @@
       #    install.
       #  - exts: an attrset containing all the extensions, mapped to their
       #    package names.
-      makePostgres = version: {
-        bin = makePostgresBin version;
-        exts = makeOurPostgresPkgsSet version;
-        recurseForDerivations = true;
-      };
+      makePostgres =
+        version:
+        {
+          variant ? "full",
+          latestOnly ? false,
+        }:
+        lib.recurseIntoAttrs {
+          bin = makePostgresBin version { inherit variant latestOnly; };
+          exts = makeOurPostgresPkgsSet version { inherit variant latestOnly; };
+        };
       basePackages = {
-        psql_15 = makePostgres "15";
-        psql_17 = makePostgres "17";
-        psql_orioledb-17 = makePostgres "orioledb-17";
+        psql_15 = makePostgres "15" { };
+        psql_17 = makePostgres "17" { };
+        psql_orioledb-17 = makePostgres "orioledb-17" { };
       };
+      slimPackages = {
+        psql_15_slim = makePostgres "15" { latestOnly = true; };
+        psql_17_slim = makePostgres "17" { latestOnly = true; };
+        psql_orioledb-17_slim = makePostgres "orioledb-17" { latestOnly = true; };
+      };
+
+      # CLI packages - minimal PostgreSQL + supautils only for Supabase CLI
+      cliPackages = {
+        psql_17_cli = makePostgres "17" { variant = "cli"; };
+      };
+
+      binPackages = lib.mapAttrs' (name: value: {
+        name = "${name}/bin";
+        value = value.bin;
+      }) (basePackages // slimPackages // cliPackages);
     in
     {
-      packages = inputs.flake-utils.lib.flattenTree basePackages;
+      packages = binPackages;
+      legacyPackages = basePackages // slimPackages // cliPackages;
     };
 }

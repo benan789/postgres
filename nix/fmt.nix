@@ -1,16 +1,23 @@
 { inputs, ... }:
 {
   imports = [ inputs.treefmt-nix.flakeModule ];
-  perSystem =
-    { pkgs, ... }:
-    {
-      treefmt.programs = {
+  perSystem = {
+    treefmt = {
+      programs = {
         deadnix.enable = true;
-        nixfmt = {
-          enable = true;
-          package = pkgs.nixfmt-rfc-style;
-        };
+        gofmt.enable = true;
+        nixfmt.enable = true;
         ruff-format.enable = true;
+        shfmt.enable = true;
+        shfmt.indent_size = null; # use shfmt's default width (tab)
+      };
+
+      settings = {
+        global.excludes = [
+          "*.sum"
+          "vendor/*"
+        ];
       };
     };
+  };
 }

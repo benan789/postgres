@@ -4,6 +4,9 @@
   stdenv,
   fetchFromGitHub,
   postgresql,
+  makeWrapper,
+  switch-ext-version,
+  latestOnly ? false,
 }:
 let
   pname = "vector";
@@ -19,10 +22,14 @@ let
   # Derived version information
   versions = lib.naturalSort (lib.attrNames supportedVersions);
   latestVersion = lib.last versions;
-  numberOfVersions = builtins.length versions;
-  packages = builtins.attrValues (
-    lib.mapAttrs (name: value: build name value.hash) supportedVersions
-  );
+  versionsToUse =
+    if latestOnly then
+      { "${latestVersion}" = supportedVersions.${latestVersion}; }
+    else
+      supportedVersions;
+  packages = builtins.attrValues (lib.mapAttrs (name: value: build name value.hash) versionsToUse);
+  versionsBuilt = if latestOnly then [ latestVersion ] else versions;
+  numberOfVersionsBuilt = builtins.length versionsBuilt;
 
   # Build function for individual versions
   build =
@@ -69,7 +76,6 @@ let
       meta = with lib; {
         description = "Open-source vector similarity search for Postgres";
         homepage = "https://github.com/${src.owner}/${src.repo}";
-        maintainers = with maintainers; [ olirice ];
         platforms = postgresql.meta.platforms;
         license = licenses.postgresql;
       };
@@ -78,16 +84,26 @@ in
 pkgs.buildEnv {
   name = pname;
   paths = packages;
+  nativeBuildInputs = [ makeWrapper ];
   pathsToLink = [
     "/lib"
     "/share/postgresql/extension"
   ];
 
+  postBuild = ''
+    makeWrapper ${lib.getExe switch-ext-version} $out/bin/switch_vector_version \
+      --prefix EXT_WRAPPER : "$out" --prefix EXT_NAME : "${pname}"
+  '';
+
   passthru = {
-    inherit versions numberOfVersions;
-    pname = "${pname}-all";
+    versions = versionsBuilt;
+    numberOfVersions = numberOfVersionsBuilt;
+    inherit pname latestOnly;
     version =
-      "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
+      if latestOnly then
+        latestVersion
+      else
+        "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
     pgRegressTestName = "pgvector";
   };
 }
