@@ -1,12 +1,12 @@
-{ lib, stdenv, fetchFromGitHub, openssl, postgresql, buildPgrxExtension_0_15_0, cargo, rust-bin }:
+{ lib, stdenv, fetchFromGitHub, openssl, postgresql, buildPgrxExtension_0_18_1, cargo, rust-bin }:
 let
   rustVersion = "1.90.0";
   cargo = rust-bin.stable.${rustVersion}.default;
 in
-buildPgrxExtension_0_15_0 rec {
+buildPgrxExtension_0_18_1 rec {
   pname = "paradedb";
   extension = "pg_search";
-  version = "0.19.0";
+  version = "0.24.1";
   inherit postgresql;
   cargoPackageFlags = ["--package pg_search"];
 
@@ -26,9 +26,9 @@ buildPgrxExtension_0_15_0 rec {
     lockFile = "${src}/Cargo.lock";
     allowBuiltinFetchGit = true;
     outputHashes = {
-      "tantivy-0.23.0" = "sha256-hzRlV7IkH7Le3ww8ScoSfjndAJSO09WIXefeY7LwF3A=";
+      #"tantivy-0.23.0" = "sha256-hzRlV7IkH7Le3ww8ScoSfjndAJSO09WIXefeY7LwF3A=";
       #"rust_icu_sys-5.0.0" = "sha256-5IinVaGLay6FWj6SLF1lGkCzRjTaf9vJuInXzMZkkRs=";
-      "tantivy-fst-0.5.0" = "sha256-YeHk7tlEE2jGxgLhqhZhFj8rtZ0bwQINNdLQDh4Mw7I=";
+      #"tantivy-fst-0.5.0" = "sha256-YeHk7tlEE2jGxgLhqhZhFj8rtZ0bwQINNdLQDh4Mw7I=";
     };
   };
 

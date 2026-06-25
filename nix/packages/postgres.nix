@@ -49,7 +49,7 @@
         ../ext/wrappers/default.nix
         ../ext/supautils.nix
         ../ext/plv8
-        ../ext/pg_search.nix
+        ../ext/paradedb
       ];
 
       #Where we import and build the orioledb extension, we add on our custom extensions

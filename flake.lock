@@ -269,12 +269,12 @@
         "narHash": "sha256-WwjUkWsjlU8iUImbivlYxNyMB1L5YVqE8QotQdL9jWc=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "18d9a58c988b48a534cf64d84124ca7440cdc0f9",
+        "rev": "a76c4553d7e741e17f289224eda135423de0491d",
         "type": "github"
       },
       "original": {
         "owner": "NixOS",
-        "repo": "nixpkgs",
+        "repo": "NixOS",
         "rev": "a76c4553d7e741e17f289224eda135423de0491d",
         "type": "github"
       }
