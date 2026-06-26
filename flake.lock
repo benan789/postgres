@@ -274,7 +274,7 @@
       },
       "original": {
         "owner": "NixOS",
-        "repo": "NixOS",
+        "repo": "nixpkgs",
         "rev": "a76c4553d7e741e17f289224eda135423de0491d",
         "type": "github"
       }
